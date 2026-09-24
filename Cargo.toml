@@ -17,6 +17,17 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 axum = "0.8"
+# default-features off: eframe 0.36's default renderer switched from glow to
+# wgpu (0.29 defaulted to glow). wgpu's DX12 backend pulls the `windows` 0.62
+# crate while another dependency in this graph pins `windows-core` 0.58,
+# and the two versions of the ID3D12* interface traits don't unify - a real
+# `cargo check` failure (E0277, "multiple different versions of crate
+# `windows`"), not a lint. Selecting the glow renderer explicitly avoids
+# pulling wgpu/windows-0.62 at all.
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "x11", "wayland", "accesskit"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
 
 [profile.release]
 lto = "thin"

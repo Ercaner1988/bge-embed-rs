@@ -14,19 +14,105 @@
 // embeddings field is private, so instead of forking the whole model we
 // rebuild only the embedding layer here with the right offset and reuse
 // candle_transformers' public BertEncoder unchanged.
+//
+// GUI NOTE: double-clicking the binary opens a small egui placeholder window
+// (real styling comes later, from a Penpot design) while the server runs in
+// a background thread. `--headless` (or BGE_HEADLESS=1) skips the window
+// entirely and behaves like the original CLI-only server.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use anyhow::{anyhow, Error as E, Result};
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
 use candle_core::{DType, Device, IndexOp, Tensor};
 use candle_nn::{embedding, layer_norm, Embedding, LayerNorm, Module, VarBuilder};
 use candle_transformers::models::bert::{BertEncoder, Config, DTYPE};
-use hf_hub::{api::tokio::Api, Repo, RepoType};
+use hf_hub::{api::tokio::Api, Cache, Repo, RepoType};
 use serde::{Deserialize, Serialize};
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc,
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    Arc, Mutex,
 };
+use std::time::Duration;
 use tokenizers::{Tokenizer, TruncationParams};
+
+/// Current phase of the server, shared with the GUI thread.
+#[derive(Clone, Debug)]
+enum Phase {
+    Downloading {
+        file: String,
+        done_bytes: u64,
+        total_bytes: Option<u64>,
+    },
+    Loading,
+    Ready {
+        url: String,
+    },
+    Failed(String),
+}
+
+impl Phase {
+    /// Fraction in [0, 1] for a progress bar, or None if the total is unknown.
+    fn fraction(&self) -> Option<f32> {
+        match self {
+            Phase::Downloading {
+                done_bytes,
+                total_bytes: Some(total),
+                ..
+            } if *total > 0 => Some(*done_bytes as f32 / *total as f32),
+            _ => None,
+        }
+    }
+}
+
+/// Shared status: phase behind a mutex (rarely changes), counters as atomics
+/// (updated on every request without contending the phase lock).
+#[derive(Default)]
+struct Status {
+    phase: Mutex<Option<Phase>>,
+    requests_served: AtomicU64,
+    texts_embedded: AtomicU64,
+    last_latency_ms: AtomicU64,
+}
+
+impl Status {
+    fn set_phase(&self, phase: Phase) {
+        *self.phase.lock().unwrap() = Some(phase);
+    }
+
+    fn record_request(&self, texts: usize, latency_ms: u64) {
+        self.requests_served.fetch_add(1, Ordering::Relaxed);
+        self.texts_embedded.fetch_add(texts as u64, Ordering::Relaxed);
+        self.last_latency_ms.store(latency_ms, Ordering::Relaxed);
+    }
+}
+
+/// Reports hf-hub download progress into `Status`. hf-hub 0.4's tokio API
+/// (`ApiRepo::download_with_progress`, src/api/tokio.rs) drives this trait
+/// itself: `init` on download start with the total size, `update` per chunk
+/// received, `finish` when the file is renamed into the cache.
+#[derive(Clone)]
+struct StatusProgress {
+    status: Arc<Status>,
+}
+
+impl hf_hub::api::tokio::Progress for StatusProgress {
+    async fn init(&mut self, size: usize, filename: &str) {
+        self.status.set_phase(Phase::Downloading {
+            file: filename.to_string(),
+            done_bytes: 0,
+            total_bytes: if size > 0 { Some(size as u64) } else { None },
+        });
+    }
+
+    async fn update(&mut self, size: usize) {
+        let mut phase = self.status.phase.lock().unwrap();
+        if let Some(Phase::Downloading { done_bytes, .. }) = phase.as_mut() {
+            *done_bytes += size as u64;
+        }
+    }
+
+    async fn finish(&mut self) {}
+}
 
 struct EmbedModel {
     tokenizer: Tokenizer,
@@ -41,16 +127,39 @@ struct EmbedModel {
 }
 
 impl EmbedModel {
-    async fn load() -> Result<Self> {
+    /// Fetches `filename` from the standard HF cache if present, otherwise
+    /// downloads it with progress reported into `status`. Checking the cache
+    /// ourselves (instead of `ApiRepo::get`) is what lets us attach progress
+    /// only to an actual download, so an existing cache never re-downloads.
+    async fn fetch(
+        repo: &hf_hub::api::tokio::ApiRepo,
+        cache: &Cache,
+        cache_repo_id: &Repo,
+        filename: &str,
+        status: &Arc<Status>,
+    ) -> Result<std::path::PathBuf> {
+        if let Some(path) = cache.repo(cache_repo_id.clone()).get(filename) {
+            return Ok(path);
+        }
+        let progress = StatusProgress { status: status.clone() };
+        Ok(repo.download_with_progress(filename, progress).await?)
+    }
+
+    async fn load(status: Arc<Status>) -> Result<Self> {
         let device = Device::Cpu;
         println!("Loading BAAI/bge-m3 (downloaded from the Hugging Face hub on first run, ~2.2 GB)...");
         let api = Api::new()?;
-        let repo = api.repo(Repo::new("BAAI/bge-m3".to_string(), RepoType::Model));
+        let repo_id = Repo::new("BAAI/bge-m3".to_string(), RepoType::Model);
+        let repo = api.repo(repo_id.clone());
+        // Same default cache location Api::new() uses (Cache::default()), so
+        // an already-populated cache from a previous run is found unchanged.
+        let cache = Cache::default();
 
-        let config_path = repo.get("config.json").await?;
-        let tokenizer_path = repo.get("tokenizer.json").await?;
+        let config_path = Self::fetch(&repo, &cache, &repo_id, "config.json", &status).await?;
+        let tokenizer_path = Self::fetch(&repo, &cache, &repo_id, "tokenizer.json", &status).await?;
         // The BAAI/bge-m3 repo ships pytorch_model.bin only (no safetensors).
-        let weights_path = repo.get("pytorch_model.bin").await?;
+        let weights_path = Self::fetch(&repo, &cache, &repo_id, "pytorch_model.bin", &status).await?;
+        status.set_phase(Phase::Loading);
 
         let config: Config = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
         // Positions run 2..=seq_len+1, so the model accepts at most max_position_embeddings-2 tokens.
@@ -236,11 +345,21 @@ struct EmbeddingResponse {
     model: String,
 }
 
+/// axum handler state: the model plus the shared status counters it updates.
+#[derive(Clone)]
+struct AppState {
+    model: Arc<EmbedModel>,
+    status: Arc<Status>,
+}
+
 async fn embeddings_handler(
-    State(model): State<Arc<EmbedModel>>,
+    State(state): State<AppState>,
     Json(req): Json<EmbeddingRequest>,
 ) -> Result<Json<EmbeddingResponse>, (StatusCode, String)> {
     let inputs = req.input.into_vec();
+    let text_count = inputs.len();
+    let started = std::time::Instant::now();
+    let model = state.model.clone();
     // Sequential embedding keeps only ~3 cores busy on candle's CPU backend (non-matmul ops
     // are single-threaded). Measured on an idle 6-core/12-thread Ryzen, 20 x ~1560-char
     // chunks, s/chunk: BGE_PARALLEL 1=4.23 2=3.00 3=2.32 4=1.91 6=1.96 -> default 4.
@@ -250,6 +369,10 @@ async fn embeddings_handler(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    state
+        .status
+        .record_request(text_count, started.elapsed().as_millis() as u64);
 
     let data = result
         .into_iter()
@@ -272,30 +395,189 @@ async fn health() -> impl IntoResponse {
     StatusCode::OK
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // The binary is built for x86-64-v3; fail with a readable message instead of SIGILL.
-    #[cfg(target_arch = "x86_64")]
-    if !std::arch::is_x86_feature_detected!("avx2") || !std::arch::is_x86_feature_detected!("fma") {
-        return Err(anyhow!("this build needs a CPU with AVX2 and FMA (Intel 2013+, AMD 2015+)"));
-    }
-
-    let model = Arc::new(EmbedModel::load().await?);
-
-    let app = Router::new()
-        .route("/v1/embeddings", post(embeddings_handler))
-        .route("/health", axum::routing::get(health))
-        .with_state(model);
+/// Loads the model and serves the HTTP API. Identical in headless and GUI
+/// mode; only who calls it (main thread vs. a background thread) differs.
+async fn run_server(status: Arc<Status>) -> Result<()> {
+    let model = Arc::new(EmbedModel::load(status.clone()).await?);
 
     // Loopback only by default. BGE_HOST=0.0.0.0 exposes the server to your LAN and to
     // Docker containers on Linux - there is no authentication.
     let host = std::env::var("BGE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = std::env::var("BGE_PORT").unwrap_or_else(|_| "11435".to_string());
     let addr = format!("{host}:{port}");
+    let url = format!("http://{addr}/v1/embeddings");
+
+    let app = Router::new()
+        .route("/v1/embeddings", post(embeddings_handler))
+        .route("/health", axum::routing::get(health))
+        .with_state(AppState { model, status: status.clone() });
+
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    println!("bge-embed-rs listening on http://{addr}/v1/embeddings");
+    println!("bge-embed-rs listening on {url}");
+    status.set_phase(Phase::Ready { url });
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// GUI placeholder (real styling comes later from a Penpot design): shows the
+/// current phase, a progress bar while downloading, the endpoint with a Copy
+/// button once ready, and the request counters.
+struct GuiApp {
+    status: Arc<Status>,
+}
+
+impl eframe::App for GuiApp {
+    // eframe 0.36 renamed App::update(ctx, frame) to App::ui(ui, frame); the
+    // root Ui is handed in directly instead of the Context (CentralPanel::show
+    // now takes &mut Ui too - see egui 0.36 containers/panel.rs).
+    fn ui(&mut self, ui: &mut eframe::egui::Ui, _frame: &mut eframe::Frame) {
+        use eframe::egui;
+        let ctx = ui.ctx().clone();
+        // The server thread updates status independently of egui's event loop,
+        // so keep repainting on a timer rather than only on user input.
+        ctx.request_repaint_after(Duration::from_millis(250));
+
+        egui::CentralPanel::default().show(ui, |ui| {
+            ui.heading("bge-embed-rs");
+            ui.separator();
+            let phase = self.status.phase.lock().unwrap().clone();
+            match phase {
+                None => {
+                    ui.label("Starting...");
+                }
+                Some(ref p @ Phase::Downloading { ref file, done_bytes, total_bytes }) => {
+                    ui.label(format!("Downloading {file}"));
+                    match p.fraction() {
+                        Some(frac) => {
+                            ui.add(egui::ProgressBar::new(frac).show_percentage());
+                        }
+                        None => {
+                            ui.add(egui::ProgressBar::new(0.0).animate(true));
+                        }
+                    }
+                    let done_mb = done_bytes / 1_000_000;
+                    match total_bytes {
+                        Some(total) => ui.label(format!("{done_mb} / {} MB", total / 1_000_000)),
+                        None => ui.label(format!("{done_mb} MB downloaded")),
+                    };
+                }
+                Some(Phase::Loading) => {
+                    ui.label("Loading model into memory...");
+                }
+                Some(Phase::Ready { url }) => {
+                    ui.colored_label(egui::Color32::from_rgb(0, 150, 0), "Ready");
+                    ui.horizontal(|ui| {
+                        ui.monospace(&url);
+                        if ui.button("Copy").clicked() {
+                            ctx.copy_text(url.clone());
+                        }
+                    });
+                    ui.separator();
+                    ui.label(format!(
+                        "Requests served: {}",
+                        self.status.requests_served.load(Ordering::Relaxed)
+                    ));
+                    ui.label(format!(
+                        "Texts embedded: {}",
+                        self.status.texts_embedded.load(Ordering::Relaxed)
+                    ));
+                    ui.label(format!(
+                        "Last request latency: {} ms",
+                        self.status.last_latency_ms.load(Ordering::Relaxed)
+                    ));
+                }
+                Some(Phase::Failed(msg)) => {
+                    ui.colored_label(egui::Color32::RED, format!("Failed: {msg}"));
+                }
+            }
+        });
+    }
+}
+
+fn headless_requested() -> bool {
+    std::env::args().any(|a| a == "--headless")
+        || std::env::var("BGE_HEADLESS").is_ok_and(|v| v == "1")
+}
+
+/// The binary is built for x86-64-v3; without AVX2+FMA candle's CPU ops would
+/// SIGILL. Checked once and shared by both startup paths below.
+fn avx2_fma_available() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma")
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        true
+    }
+}
+
+const AVX2_FMA_MISSING_MSG: &str = "this build needs a CPU with AVX2 and FMA (Intel 2013+, AMD 2015+)";
+
+fn main() -> Result<()> {
+    let headless = headless_requested();
+
+    // A GUI-subsystem Windows binary has no console; reattach to the
+    // launching terminal's so --headless output is still visible there.
+    #[cfg(windows)]
+    if headless {
+        unsafe {
+            windows_sys::Win32::System::Console::AttachConsole(
+                windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
+            );
+        }
+    }
+
+    let status = Arc::new(Status::default());
+
+    if headless {
+        // No window to show a message in, so fail loudly on stdout/exit code
+        // instead of limping into a server that would SIGILL on first request.
+        if !avx2_fma_available() {
+            return Err(anyhow!(AVX2_FMA_MISSING_MSG));
+        }
+        let rt = tokio::runtime::Runtime::new()?;
+        return rt.block_on(run_server(status));
+    }
+
+    // GUI mode: eframe owns the main thread (required on macOS), a background
+    // thread owns its own multi-thread tokio runtime for model loading + serving.
+    // A windows_subsystem = "windows" build has no console, so an early
+    // `return Err(...)` here would be invisible - the app would just fail to
+    // open with no explanation. Instead skip starting the server and let the
+    // window itself show the failure via Phase::Failed.
+    if avx2_fma_available() {
+        let server_status = status.clone();
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    server_status.set_phase(Phase::Failed(e.to_string()));
+                    return;
+                }
+            };
+            if let Err(e) = rt.block_on(run_server(server_status.clone())) {
+                server_status.set_phase(Phase::Failed(e.to_string()));
+            }
+        });
+    } else {
+        status.set_phase(Phase::Failed(AVX2_FMA_MISSING_MSG.to_string()));
+    }
+
+    let native_options = eframe::NativeOptions {
+        viewport: eframe::egui::ViewportBuilder::default().with_inner_size([420.0, 320.0]),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "bge-embed-rs",
+        native_options,
+        Box::new(|_cc| Ok(Box::new(GuiApp { status }))),
+    )
+    .map_err(|e| anyhow!("gui error: {e}"))
+    // ponytail: closing the window returns here and main() ends, which tears
+    // down the whole process (and the server thread with it) - no separate
+    // shutdown signal needed. Add graceful shutdown if in-flight requests
+    // ever need to drain before exit.
 }
 
 #[cfg(test)]
@@ -343,5 +625,34 @@ mod tests {
         });
         assert!(r.is_err());
         assert!(embed_parallel(&[], 4, |_| Ok(vec![1.0])).unwrap().is_empty());
+    }
+
+    #[test]
+    fn progress_fraction_none_when_total_unknown() {
+        let p = Phase::Downloading {
+            file: "pytorch_model.bin".into(),
+            done_bytes: 1_000,
+            total_bytes: None,
+        };
+        assert_eq!(p.fraction(), None);
+    }
+
+    #[test]
+    fn progress_fraction_known_total() {
+        let p = Phase::Downloading {
+            file: "pytorch_model.bin".into(),
+            done_bytes: 50,
+            total_bytes: Some(200),
+        };
+        assert_eq!(p.fraction(), Some(0.25));
+    }
+
+    #[test]
+    fn failed_phase_carries_message() {
+        let p = Phase::Failed("network error".to_string());
+        match p {
+            Phase::Failed(msg) => assert_eq!(msg, "network error"),
+            _ => panic!("expected Failed"),
+        }
     }
 }

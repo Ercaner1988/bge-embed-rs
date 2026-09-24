@@ -1,0 +1,84 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --release
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-pc-windows-msvc,    os: windows-latest,   smoke: true }
+          - { target: aarch64-pc-windows-msvc,   os: windows-11-arm,   smoke: true }
+          - { target: x86_64-unknown-linux-gnu,  os: ubuntu-22.04,     smoke: true }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm, smoke: true }
+          - { target: aarch64-apple-darwin,      os: macos-14,         smoke: true }
+          # Cross-built on Apple Silicon; Rosetta has no AVX2, so it cannot be smoke-tested here.
+          - { target: x86_64-apple-darwin,       os: macos-14,         smoke: false }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          ext=""; [[ "${{ matrix.target }}" == *windows* ]] && ext=".exe"
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/bge-embed-rs$ext" "dist/bge-embed-rs-${{ matrix.target }}$ext"
+          echo "BIN=dist/bge-embed-rs-${{ matrix.target }}$ext" >> "$GITHUB_ENV"
+
+      - name: Cache model
+        if: matrix.smoke && startsWith(github.ref, 'refs/tags/')
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub/models--BAAI--bge-m3
+          key: bge-m3-${{ runner.os }}
+
+      - name: Smoke test (download model, embed one text)
+        if: matrix.smoke && startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$BIN" > server.log 2>&1 &
+          for i in $(seq 1 120); do curl -sf http://127.0.0.1:11435/health && break; sleep 5; done
+          dim=$(curl -sf http://127.0.0.1:11435/v1/embeddings -H 'Content-Type: application/json' \
+            -d '{"model":"bge-m3","input":"Merhaba dünya / hello world"}' | "$PY" -c 'import sys,json; print(len(json.load(sys.stdin)["data"][0]["embedding"]))')
+          cat server.log
+          test "$dim" = "1024"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bge-embed-rs-${{ matrix.target }}
+          path: dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/* --repo "${{ github.repository }}" --generate-notes

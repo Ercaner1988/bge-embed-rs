@@ -1,0 +1,8 @@
+# candle's CPU elementwise ops (LayerNorm, GELU, softmax, residual adds) have no
+# runtime SIMD dispatch, so they only use what the compile target allows. On an
+# SSE2-baseline x86-64 build they were ~10x slower than with AVX2 enabled.
+# x86-64-v3 = AVX2 + FMA + BMI (Intel Haswell 2013+, AMD Excavator/Zen 2015+);
+# the binary refuses to start with a clear message on older CPUs.
+# aarch64 targets already get NEON by default.
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=x86-64-v3"]

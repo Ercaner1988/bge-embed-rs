@@ -15,10 +15,10 @@
 // rebuild only the embedding layer here with the right offset and reuse
 // candle_transformers' public BertEncoder unchanged.
 //
-// GUI NOTE: double-clicking the binary opens a small egui placeholder window
-// (real styling comes later, from a Penpot design) while the server runs in
-// a background thread. `--headless` (or BGE_HEADLESS=1) skips the window
-// entirely and behaves like the original CLI-only server.
+// GUI NOTE: double-clicking the binary opens the egui window from
+// design/DESIGN.md (theme.rs + gui.rs) while the server runs in a background
+// thread. `--headless` (or BGE_HEADLESS=1) skips the window entirely and
+// behaves like the original CLI-only server.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use anyhow::{anyhow, Error as E, Result};
@@ -32,8 +32,34 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc, Mutex,
 };
-use std::time::Duration;
 use tokenizers::{Tokenizer, TruncationParams};
+
+mod gui;
+mod theme;
+
+/// Server defaults, also read back by the Settings/Status screens (`gui.rs`)
+/// so they never show an address the server didn't actually bind to.
+const DEFAULT_HOST: &str = "127.0.0.1";
+const DEFAULT_PORT: &str = "11435";
+const DEFAULT_PARALLEL: usize = 4;
+
+/// Loopback only by default. BGE_HOST=0.0.0.0 exposes the server to your LAN
+/// and to Docker containers on Linux - there is no authentication.
+fn effective_host() -> String {
+    std::env::var("BGE_HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string())
+}
+
+fn effective_port() -> String {
+    std::env::var("BGE_PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string())
+}
+
+fn effective_parallel() -> usize {
+    std::env::var("BGE_PARALLEL")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(DEFAULT_PARALLEL)
+}
 
 /// Current phase of the server, shared with the GUI thread.
 #[derive(Clone, Debug)]
@@ -198,11 +224,7 @@ impl EmbedModel {
             embeddings_layer_norm,
             encoder,
             pad_token_id: config.pad_token_id as u32,
-            parallel: std::env::var("BGE_PARALLEL")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .filter(|&n| n >= 1)
-                .unwrap_or(4),
+            parallel: effective_parallel(),
             device,
         })
     }
@@ -400,10 +422,8 @@ async fn health() -> impl IntoResponse {
 async fn run_server(status: Arc<Status>) -> Result<()> {
     let model = Arc::new(EmbedModel::load(status.clone()).await?);
 
-    // Loopback only by default. BGE_HOST=0.0.0.0 exposes the server to your LAN and to
-    // Docker containers on Linux - there is no authentication.
-    let host = std::env::var("BGE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = std::env::var("BGE_PORT").unwrap_or_else(|_| "11435".to_string());
+    let host = effective_host();
+    let port = effective_port();
     let addr = format!("{host}:{port}");
     let url = format!("http://{addr}/v1/embeddings");
 
@@ -417,81 +437,6 @@ async fn run_server(status: Arc<Status>) -> Result<()> {
     status.set_phase(Phase::Ready { url });
     axum::serve(listener, app).await?;
     Ok(())
-}
-
-/// GUI placeholder (real styling comes later from a Penpot design): shows the
-/// current phase, a progress bar while downloading, the endpoint with a Copy
-/// button once ready, and the request counters.
-struct GuiApp {
-    status: Arc<Status>,
-}
-
-impl eframe::App for GuiApp {
-    // eframe 0.36 renamed App::update(ctx, frame) to App::ui(ui, frame); the
-    // root Ui is handed in directly instead of the Context (CentralPanel::show
-    // now takes &mut Ui too - see egui 0.36 containers/panel.rs).
-    fn ui(&mut self, ui: &mut eframe::egui::Ui, _frame: &mut eframe::Frame) {
-        use eframe::egui;
-        let ctx = ui.ctx().clone();
-        // The server thread updates status independently of egui's event loop,
-        // so keep repainting on a timer rather than only on user input.
-        ctx.request_repaint_after(Duration::from_millis(250));
-
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading("bge-embed-rs");
-            ui.separator();
-            let phase = self.status.phase.lock().unwrap().clone();
-            match phase {
-                None => {
-                    ui.label("Starting...");
-                }
-                Some(ref p @ Phase::Downloading { ref file, done_bytes, total_bytes }) => {
-                    ui.label(format!("Downloading {file}"));
-                    match p.fraction() {
-                        Some(frac) => {
-                            ui.add(egui::ProgressBar::new(frac).show_percentage());
-                        }
-                        None => {
-                            ui.add(egui::ProgressBar::new(0.0).animate(true));
-                        }
-                    }
-                    let done_mb = done_bytes / 1_000_000;
-                    match total_bytes {
-                        Some(total) => ui.label(format!("{done_mb} / {} MB", total / 1_000_000)),
-                        None => ui.label(format!("{done_mb} MB downloaded")),
-                    };
-                }
-                Some(Phase::Loading) => {
-                    ui.label("Loading model into memory...");
-                }
-                Some(Phase::Ready { url }) => {
-                    ui.colored_label(egui::Color32::from_rgb(0, 150, 0), "Ready");
-                    ui.horizontal(|ui| {
-                        ui.monospace(&url);
-                        if ui.button("Copy").clicked() {
-                            ctx.copy_text(url.clone());
-                        }
-                    });
-                    ui.separator();
-                    ui.label(format!(
-                        "Requests served: {}",
-                        self.status.requests_served.load(Ordering::Relaxed)
-                    ));
-                    ui.label(format!(
-                        "Texts embedded: {}",
-                        self.status.texts_embedded.load(Ordering::Relaxed)
-                    ));
-                    ui.label(format!(
-                        "Last request latency: {} ms",
-                        self.status.last_latency_ms.load(Ordering::Relaxed)
-                    ));
-                }
-                Some(Phase::Failed(msg)) => {
-                    ui.colored_label(egui::Color32::RED, format!("Failed: {msg}"));
-                }
-            }
-        });
-    }
 }
 
 fn headless_requested() -> bool {
@@ -565,13 +510,18 @@ fn main() -> Result<()> {
     }
 
     let native_options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default().with_inner_size([420.0, 320.0]),
+        viewport: eframe::egui::ViewportBuilder::default()
+            .with_inner_size([480.0, 560.0])
+            .with_min_inner_size([480.0, 560.0]),
         ..Default::default()
     };
     eframe::run_native(
         "bge-embed-rs",
         native_options,
-        Box::new(|_cc| Ok(Box::new(GuiApp { status }))),
+        Box::new(|cc| {
+            theme::apply(&cc.egui_ctx);
+            Ok(Box::new(gui::GuiApp::new(status)))
+        }),
     )
     .map_err(|e| anyhow!("gui error: {e}"))
     // ponytail: closing the window returns here and main() ends, which tears

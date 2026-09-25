@@ -2,11 +2,12 @@
 //! Settings, switched by a bottom nav bar. All styling comes from
 //! `theme.rs` - no inline hex/spacing/radius/size literals here.
 
+use crate::connectors::{self, OpenNotebook};
 use crate::{effective_host, effective_parallel, effective_port, Phase, Status};
 use crate::theme::{self, Palette, Weight};
 use eframe::egui::{self, Align, Color32, Layout, Ui};
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -16,14 +17,86 @@ enum Screen {
     Settings,
 }
 
+/// Connections-screen state, shared with the background thread that runs
+/// `detect`/`status`/`connect` off the GUI thread (they're blocking HTTP
+/// calls; see connectors.rs).
+struct ConnState {
+    /// `None` until the first check completes ("Checking..." in the meantime).
+    on_status: Mutex<Option<connectors::Status>>,
+    checking: AtomicBool,
+    docker: AtomicBool,
+    password: Mutex<String>,
+    /// True only when the last `connect()` in this session actually flipped
+    /// Open Notebook's default embedding model (not just re-confirmed it) -
+    /// gates the re-embedding caption.
+    default_changed: AtomicBool,
+}
+
+impl Default for ConnState {
+    fn default() -> Self {
+        Self {
+            on_status: Mutex::new(None),
+            checking: AtomicBool::new(false),
+            docker: AtomicBool::new(false),
+            password: Mutex::new(String::new()),
+            default_changed: AtomicBool::new(false),
+        }
+    }
+}
+
+/// Spawns a background thread to (re-)run Open Notebook detection, unless one
+/// is already in flight. Never touches the GUI thread.
+fn spawn_check(conn: Arc<ConnState>) {
+    if conn.checking.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let embed_url = connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
+        let status = if OpenNotebook::detect(OpenNotebook::DEFAULT_BASE_URL) {
+            let pw = conn.password.lock().unwrap().clone();
+            let pw = if pw.is_empty() { None } else { Some(pw.as_str()) };
+            OpenNotebook::status(OpenNotebook::DEFAULT_BASE_URL, &embed_url, pw)
+        } else {
+            connectors::Status::NotFound
+        };
+        *conn.on_status.lock().unwrap() = Some(status);
+        conn.checking.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Spawns a background thread to run `connect()`, then re-checks status.
+fn spawn_connect(conn: Arc<ConnState>) {
+    if conn.checking.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let embed_url = connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
+        let pw = conn.password.lock().unwrap().clone();
+        let pw_opt = if pw.is_empty() { None } else { Some(pw.as_str()) };
+        if let Ok(changed) = OpenNotebook::connect(OpenNotebook::DEFAULT_BASE_URL, &embed_url, pw_opt) {
+            conn.default_changed.store(changed, Ordering::Relaxed);
+        }
+        let status = OpenNotebook::status(OpenNotebook::DEFAULT_BASE_URL, &embed_url, pw_opt);
+        *conn.on_status.lock().unwrap() = Some(status);
+        conn.checking.store(false, Ordering::SeqCst);
+    });
+}
+
 pub struct GuiApp {
     status: Arc<Status>,
     screen: Screen,
+    prev_screen: Screen,
+    conn: Arc<ConnState>,
 }
 
 impl GuiApp {
     pub fn new(status: Arc<Status>) -> Self {
-        Self { status, screen: Screen::Status }
+        Self {
+            status,
+            screen: Screen::Status,
+            prev_screen: Screen::Status,
+            conn: Arc::new(ConnState::default()),
+        }
     }
 }
 
@@ -46,9 +119,16 @@ impl eframe::App for GuiApp {
                 header_row(ui, p, phase.as_ref());
                 ui.add_space(theme::GAP_LG);
 
+                // "Detection runs on screen open" (DESIGN.md) - trigger once
+                // per transition into the Connections screen.
+                if self.screen == Screen::Connections && self.prev_screen != Screen::Connections {
+                    spawn_check(self.conn.clone());
+                }
+                self.prev_screen = self.screen;
+
                 match self.screen {
                     Screen::Status => status_screen(ui, p, &self.status, phase.as_ref()),
-                    Screen::Connections => connections_screen(ui, p),
+                    Screen::Connections => connections_screen(ui, p, &self.conn),
                     Screen::Settings => settings_screen(ui, p),
                 }
 
@@ -244,41 +324,98 @@ fn stats_row(ui: &mut Ui, p: Palette, status: &Status) {
 // Screen: Connections
 // ---------------------------------------------------------------------------
 
-fn connections_screen(ui: &mut Ui, p: Palette) {
+/// One row of the "Detected on this computer" / "Other tools" cards: avatar,
+/// name + status-dot meta line, and a caller-supplied button (DESIGN.md).
+fn connector_row(ui: &mut Ui, p: Palette, initials: &str, name: &str, dot: Color32, meta: &str, button: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        theme::avatar(ui, p, initials);
+        ui.add_space(theme::GAP_SM);
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = theme::GAP_XS;
+            ui.label(theme::rich(name, theme::SIZE_BODY, Weight::SemiBold, p.text));
+            theme::status_dot_row(ui, p, dot, meta);
+        });
+        ui.with_layout(Layout::right_to_left(Align::Center), button);
+    });
+}
+
+fn open_notebook_row(ui: &mut Ui, p: Palette, conn: &Arc<ConnState>) {
+    let status = *conn.on_status.lock().unwrap();
+    let base_host = "127.0.0.1:5055"; // OpenNotebook::DEFAULT_BASE_URL sans scheme
+    let (dot, meta, show_connect) = match status {
+        None => (p.text_muted, "Checking\u{2026}".to_string(), false),
+        Some(connectors::Status::Connected) => (p.success, format!("Connected \u{b7} {base_host}"), false),
+        Some(connectors::Status::NeedsKey) => (p.warning, format!("Needs a password \u{b7} {base_host}"), true),
+        Some(connectors::Status::Found) => (p.text_muted, format!("Found \u{b7} {base_host}"), true),
+        Some(connectors::Status::NotFound) => (p.text_muted, "Not found on this computer".to_string(), false),
+    };
+
+    connector_row(ui, p, OpenNotebook::INITIALS, OpenNotebook::NAME, dot, &meta, |ui| {
+        if status == Some(connectors::Status::Connected) {
+            if theme::secondary_button(ui, p, "Re-check", !conn.checking.load(Ordering::Relaxed)).clicked() {
+                spawn_check(conn.clone());
+            }
+        } else if show_connect {
+            if theme::primary_button(ui, p, "Connect", !conn.checking.load(Ordering::Relaxed)).clicked() {
+                spawn_connect(conn.clone());
+            }
+        } else {
+            if theme::secondary_button(ui, p, "Re-check", !conn.checking.load(Ordering::Relaxed)).clicked() {
+                spawn_check(conn.clone());
+            }
+        }
+    });
+
+    if status == Some(connectors::Status::NeedsKey) {
+        ui.add_space(theme::GAP_XS);
+        let mut pw = conn.password.lock().unwrap().clone();
+        if ui.add(egui::TextEdit::singleline(&mut pw).password(true).hint_text("Admin password")).changed() {
+            *conn.password.lock().unwrap() = pw;
+        }
+    }
+
+    // Only shown when a connect() in this session actually changed the
+    // default (not just re-confirmed it) - see ConnState::default_changed.
+    if status == Some(connectors::Status::Connected) && conn.default_changed.load(Ordering::Relaxed) {
+        ui.add_space(theme::GAP_XS);
+        ui.label(theme::rich(
+            "Default embedding model changed. Existing sources may need re-embedding for consistent search.",
+            theme::SIZE_CAPTION,
+            Weight::Regular,
+            p.text_muted,
+        ));
+    }
+
+    ui.add_space(theme::GAP_SM);
+    let mut docker = conn.docker.load(Ordering::Relaxed);
+    if ui.checkbox(&mut docker, "Runs in Docker").changed() {
+        conn.docker.store(docker, Ordering::Relaxed);
+    }
+}
+
+fn connections_screen(ui: &mut Ui, p: Palette, conn: &Arc<ConnState>) {
     ui.spacing_mut().item_spacing.y = theme::GAP_LG;
 
     theme::card(ui, p, |ui| {
-        ui.label(theme::rich(
-            "Detected on this computer",
-            theme::SIZE_BODY,
-            Weight::SemiBold,
-            p.text,
-        ));
+        ui.label(theme::rich("Detected on this computer", theme::SIZE_BODY, Weight::SemiBold, p.text));
         ui.add_space(theme::GAP_MD);
-        // ponytail: connector detection is a separate future task - this is
-        // the empty state the task card asked for, not a placeholder list.
-        ui.label(theme::rich(
-            "Detection comes in the next version.",
-            theme::SIZE_CAPTION,
-            Weight::Regular,
-            p.text_muted,
-        ));
+        open_notebook_row(ui, p, conn);
     });
 
     theme::card(ui, p, |ui| {
-        ui.label(theme::rich(
-            "Other tools (manual setup)",
-            theme::SIZE_BODY,
-            Weight::SemiBold,
-            p.text,
-        ));
+        ui.label(theme::rich("Other tools (manual setup)", theme::SIZE_BODY, Weight::SemiBold, p.text));
         ui.add_space(theme::GAP_MD);
-        ui.label(theme::rich(
-            "Detection comes in the next version.",
-            theme::SIZE_CAPTION,
-            Weight::Regular,
-            p.text_muted,
-        ));
+        let embed_url = connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
+        for (i, tool) in connectors::MANUAL_TOOLS.iter().enumerate() {
+            if i > 0 {
+                ui.add_space(theme::GAP_MD);
+            }
+            connector_row(ui, p, tool.initials, tool.name, p.text_muted, "Manual setup", |ui| {
+                if theme::secondary_button(ui, p, "Copy config", true).clicked() {
+                    ui.ctx().copy_text((tool.config)(&embed_url));
+                }
+            });
+        }
     });
 
     ui.label(theme::rich(

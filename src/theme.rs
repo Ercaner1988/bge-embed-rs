@@ -264,10 +264,6 @@ pub fn primary_button(ui: &mut Ui, p: Palette, label: &str, enabled: bool) -> Re
 }
 
 /// Secondary button: surface bg + 1 px border, radius 4, padding 16x8, label caption/500.
-/// ponytail: required shared part per DESIGN.md (e.g. Connections' "Re-check" /
-/// "Copy config" rows), not called yet since connector detection is a
-/// separate future task - the Connections screen only renders an empty state.
-#[allow(dead_code)]
 pub fn secondary_button(ui: &mut Ui, p: Palette, label: &str, enabled: bool) -> Response {
     button(
         ui,
@@ -361,10 +357,32 @@ pub fn url_field(ui: &mut Ui, p: Palette, text: &str) -> Response {
     response
 }
 
-// ponytail: DESIGN.md's avatar/status-dot rows for detected connectors are
-// not wired up yet - the task card wants an empty state instead (connector
-// detection is a separate future task). Add avatar()/status_dot() helpers
-// here when that lands, instead of drawing them ad hoc in gui.rs.
+/// Connections-row avatar: "32 px circle, window bg + border, 2-letter
+/// initials caption/600 muted text" (DESIGN.md).
+pub fn avatar(ui: &mut Ui, p: Palette, initials: &str) {
+    let d = 32.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(d), Sense::hover());
+    ui.painter().circle_filled(rect.center(), d / 2.0, p.bg_window);
+    ui.painter()
+        .circle_stroke(rect.center(), d / 2.0 - BORDER_WIDTH / 2.0, Stroke::new(BORDER_WIDTH, p.border));
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        initials,
+        font(SIZE_CAPTION, Weight::SemiBold),
+        p.text_muted,
+    );
+}
+
+/// Connections-row meta line: "6 px status dot + caption muted text, gap 4" (DESIGN.md).
+pub fn status_dot_row(ui: &mut Ui, p: Palette, dot_color: Color32, label: &str) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = GAP_XS;
+        let (rect, _) = ui.allocate_exact_size(Vec2::splat(6.0), Sense::hover());
+        ui.painter().circle_filled(rect.center(), 3.0, dot_color);
+        ui.label(rich(label, SIZE_CAPTION, Weight::Regular, p.text_muted));
+    });
+}
 
 #[cfg(test)]
 mod tests {

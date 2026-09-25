@@ -472,6 +472,7 @@ dependencies = [
  "serde_json",
  "tokenizers",
  "tokio",
+ "ureq",
  "windows-sys 0.61.2",
 ]
 

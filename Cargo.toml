@@ -17,6 +17,12 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 axum = "0.8"
+# ureq (blocking, rustls): already resolved transitively via hf-hub's sync
+# feature (see Cargo.lock), so pulling it in directly adds no new crate to
+# the tree, just a Cargo.toml entry - much smaller than pulling reqwest+tokio
+# machinery onto a plain std::thread for a couple of short-lived GET/POST
+# probes. tls-rustls avoids native-tls/OpenSSL; json for serde_json bodies.
+ureq = { version = "2", default-features = false, features = ["tls", "json", "gzip"] }
 # default-features off: eframe 0.36's default renderer switched from glow to
 # wgpu (0.29 defaulted to glow). wgpu's DX12 backend pulls the `windows` 0.62
 # crate while another dependency in this graph pins `windows-core` 0.58,

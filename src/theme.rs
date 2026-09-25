@@ -274,6 +274,15 @@ pub fn secondary_button(ui: &mut Ui, p: Palette, label: &str, enabled: bool) -> 
     )
 }
 
+/// Danger button: same shape as the primary button (radius 4, padding
+/// 16x8, label caption/600), but filled with `status.error` instead of
+/// `accent.default` - for a destructive confirmation action. No new colour
+/// token: reuses `p.error` (already used for the Failed dot/text) and
+/// `p.accent_on` (already used for text-on-fill).
+pub fn danger_button(ui: &mut Ui, p: Palette, label: &str, enabled: bool) -> Response {
+    button(ui, enabled, rich(label, SIZE_CAPTION, Weight::SemiBold, p.accent_on), p.error, Stroke::NONE)
+}
+
 /// Status pill: surface bg, 1 px border, full radius, padding 8x4, 8 px dot +
 /// caption/500 label.
 pub fn status_pill(ui: &mut Ui, p: Palette, dot_color: Color32, label: &str) {

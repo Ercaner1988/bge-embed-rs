@@ -2,7 +2,7 @@
 //! Settings, switched by a bottom nav bar. All styling comes from
 //! `theme.rs` - no inline hex/spacing/radius/size literals here.
 
-use crate::connectors::{self, OpenNotebook};
+use crate::connectors::{self, Tool};
 use crate::{effective_host, effective_parallel, effective_port, Phase, Status};
 use crate::theme::{self, Palette, Weight};
 use eframe::egui::{self, Align, Color32, Layout, Ui};
@@ -17,68 +17,123 @@ enum Screen {
     Settings,
 }
 
-/// Connections-screen state, shared with the background thread that runs
-/// `detect`/`status`/`connect` off the GUI thread (they're blocking HTTP
-/// calls; see connectors.rs).
-struct ConnState {
+/// Per-tool Connections-screen state, shared with the background thread that
+/// runs `detect`/`status`/`connect` off the GUI thread (they're blocking
+/// HTTP calls; see connectors.rs). One of these per `Tool` variant.
+struct ToolState {
     /// `None` until the first check completes ("Checking..." in the meantime).
-    on_status: Mutex<Option<connectors::Status>>,
+    tool_status: Mutex<Option<connectors::Status>>,
     checking: AtomicBool,
-    docker: AtomicBool,
     password: Mutex<String>,
-    /// True only when the last `connect()` in this session actually flipped
-    /// Open Notebook's default embedding model (not just re-confirmed it) -
-    /// gates the re-embedding caption.
-    default_changed: AtomicBool,
+    /// Which of `Tool::candidate_base_urls()` last answered `detect()` -
+    /// `None` once a check has run and found nothing (`Status::NotFound`).
+    base_url: Mutex<Option<&'static str>>,
+    /// True only when the last `connect()` in this session actually changed
+    /// the tool's embedding engine/model (not just re-confirmed it) - gates
+    /// the re-index/re-embed caption.
+    changed: AtomicBool,
+    /// Set when the last `connect()` attempt came back
+    /// `ConnectOutcome::NeedsResetConfirmation` (AnythingLLM only) - the row
+    /// shows an inline "this deletes your data" confirmation instead of the
+    /// normal action button until the user confirms or cancels.
+    needs_reset_confirm: AtomicBool,
+    /// Error message from the last failed `connect()` (e.g. AnythingLLM's
+    /// `update-env` validation error), shown inline in `status.error` colour.
+    last_error: Mutex<Option<String>>,
+}
+
+impl Default for ToolState {
+    fn default() -> Self {
+        Self {
+            tool_status: Mutex::new(None),
+            checking: AtomicBool::new(false),
+            password: Mutex::new(String::new()),
+            base_url: Mutex::new(None),
+            changed: AtomicBool::new(false),
+            needs_reset_confirm: AtomicBool::new(false),
+            last_error: Mutex::new(None),
+        }
+    }
+}
+
+/// Connections-screen state: one `ToolState` per `Tool::ALL` entry, plus the
+/// single "Runs in Docker" toggle shared by every tool's `embed_url`.
+struct ConnState {
+    tools: [ToolState; 3],
+    docker: AtomicBool,
 }
 
 impl Default for ConnState {
     fn default() -> Self {
-        Self {
-            on_status: Mutex::new(None),
-            checking: AtomicBool::new(false),
-            docker: AtomicBool::new(false),
-            password: Mutex::new(String::new()),
-            default_changed: AtomicBool::new(false),
-        }
+        Self { tools: Default::default(), docker: AtomicBool::new(false) }
     }
 }
 
-/// Spawns a background thread to (re-)run Open Notebook detection, unless one
-/// is already in flight. Never touches the GUI thread.
-fn spawn_check(conn: Arc<ConnState>) {
-    if conn.checking.swap(true, Ordering::SeqCst) {
+fn tool_index(tool: Tool) -> usize {
+    Tool::ALL.iter().position(|t| *t == tool).unwrap()
+}
+
+/// Spawns a background thread to (re-)run `tool`'s detection, unless one is
+/// already in flight for it. Never touches the GUI thread.
+fn spawn_check(tool: Tool, conn: Arc<ConnState>) {
+    let state = &conn.tools[tool_index(tool)];
+    if state.checking.swap(true, Ordering::SeqCst) {
         return;
     }
     std::thread::spawn(move || {
+        let state = &conn.tools[tool_index(tool)];
         let embed_url = connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
-        let status = if OpenNotebook::detect(OpenNotebook::DEFAULT_BASE_URL) {
-            let pw = conn.password.lock().unwrap().clone();
-            let pw = if pw.is_empty() { None } else { Some(pw.as_str()) };
-            OpenNotebook::status(OpenNotebook::DEFAULT_BASE_URL, &embed_url, pw)
-        } else {
-            connectors::Status::NotFound
+        let base_url = tool.candidate_base_urls().iter().find(|u| tool.detect(u)).copied();
+        *state.base_url.lock().unwrap() = base_url;
+        *state.last_error.lock().unwrap() = None;
+        state.needs_reset_confirm.store(false, Ordering::Relaxed);
+        let status = match base_url {
+            Some(base_url) => {
+                let pw = state.password.lock().unwrap().clone();
+                let pw = if pw.is_empty() { None } else { Some(pw.as_str()) };
+                tool.status(base_url, &embed_url, pw)
+            }
+            None => connectors::Status::NotFound,
         };
-        *conn.on_status.lock().unwrap() = Some(status);
-        conn.checking.store(false, Ordering::SeqCst);
+        *state.tool_status.lock().unwrap() = Some(status);
+        state.checking.store(false, Ordering::SeqCst);
     });
 }
 
-/// Spawns a background thread to run `connect()`, then re-checks status.
-fn spawn_connect(conn: Arc<ConnState>) {
-    if conn.checking.swap(true, Ordering::SeqCst) {
+/// Spawns a background thread to run `tool`'s `connect()`, then re-checks
+/// status. `confirm_reset` is only meaningful for AnythingLLM (see
+/// `connectors::ConnectOutcome`) - passed through unconditionally since the
+/// other two tools' `connect()` ignores it.
+fn spawn_connect(tool: Tool, conn: Arc<ConnState>, confirm_reset: bool) {
+    let state = &conn.tools[tool_index(tool)];
+    if state.checking.swap(true, Ordering::SeqCst) {
         return;
     }
     std::thread::spawn(move || {
+        let state = &conn.tools[tool_index(tool)];
+        let Some(base_url) = *state.base_url.lock().unwrap() else {
+            state.checking.store(false, Ordering::SeqCst);
+            return;
+        };
         let embed_url = connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
-        let pw = conn.password.lock().unwrap().clone();
+        let pw = state.password.lock().unwrap().clone();
         let pw_opt = if pw.is_empty() { None } else { Some(pw.as_str()) };
-        if let Ok(changed) = OpenNotebook::connect(OpenNotebook::DEFAULT_BASE_URL, &embed_url, pw_opt) {
-            conn.default_changed.store(changed, Ordering::Relaxed);
+        *state.last_error.lock().unwrap() = None;
+        state.needs_reset_confirm.store(false, Ordering::Relaxed);
+        match tool.connect(base_url, &embed_url, pw_opt, confirm_reset) {
+            Ok(connectors::ConnectOutcome::Done(changed)) => {
+                state.changed.store(changed, Ordering::Relaxed);
+            }
+            Ok(connectors::ConnectOutcome::NeedsResetConfirmation) => {
+                state.needs_reset_confirm.store(true, Ordering::Relaxed);
+            }
+            Err(e) => {
+                *state.last_error.lock().unwrap() = Some(e.to_string());
+            }
         }
-        let status = OpenNotebook::status(OpenNotebook::DEFAULT_BASE_URL, &embed_url, pw_opt);
-        *conn.on_status.lock().unwrap() = Some(status);
-        conn.checking.store(false, Ordering::SeqCst);
+        let status = tool.status(base_url, &embed_url, pw_opt);
+        *state.tool_status.lock().unwrap() = Some(status);
+        state.checking.store(false, Ordering::SeqCst);
     });
 }
 
@@ -122,7 +177,9 @@ impl eframe::App for GuiApp {
                 // "Detection runs on screen open" (DESIGN.md) - trigger once
                 // per transition into the Connections screen.
                 if self.screen == Screen::Connections && self.prev_screen != Screen::Connections {
-                    spawn_check(self.conn.clone());
+                    for tool in Tool::ALL {
+                        spawn_check(tool, self.conn.clone());
+                    }
                 }
                 self.prev_screen = self.screen;
 
@@ -339,58 +396,95 @@ fn connector_row(ui: &mut Ui, p: Palette, initials: &str, name: &str, dot: Color
     });
 }
 
-fn open_notebook_row(ui: &mut Ui, p: Palette, conn: &Arc<ConnState>) {
-    let status = *conn.on_status.lock().unwrap();
-    let base_host = "127.0.0.1:5055"; // OpenNotebook::DEFAULT_BASE_URL sans scheme
+/// `"http://host:port"` -> `"host:port"`, for the row's meta line.
+fn host_only(url: &str) -> &str {
+    url.trim_start_matches("http://").trim_start_matches("https://")
+}
+
+/// One tool's row in the "Detected on this computer" card. Returns `false`
+/// when the row should be hidden entirely (not detected on this computer).
+fn tool_row(ui: &mut Ui, p: Palette, tool: Tool, conn: &Arc<ConnState>) -> bool {
+    let state = &conn.tools[tool_index(tool)];
+    let status = *state.tool_status.lock().unwrap();
+    if status == Some(connectors::Status::NotFound) {
+        return false;
+    }
+    let host = host_only(state.base_url.lock().unwrap().unwrap_or_else(|| tool.candidate_base_urls()[0]));
     let (dot, meta, show_connect) = match status {
         None => (p.text_muted, "Checking\u{2026}".to_string(), false),
-        Some(connectors::Status::Connected) => (p.success, format!("Connected \u{b7} {base_host}"), false),
-        Some(connectors::Status::NeedsKey) => (p.warning, format!("Needs a password \u{b7} {base_host}"), true),
-        Some(connectors::Status::Found) => (p.text_muted, format!("Found \u{b7} {base_host}"), true),
-        Some(connectors::Status::NotFound) => (p.text_muted, "Not found on this computer".to_string(), false),
+        Some(connectors::Status::Connected) => (p.success, format!("Connected \u{b7} {host}"), false),
+        Some(connectors::Status::NeedsKey) => (p.warning, format!("{} \u{b7} {host}", tool.needs_key_meta()), true),
+        Some(connectors::Status::Found) => (p.text_muted, format!("Found \u{b7} {host}"), true),
+        Some(connectors::Status::NotFound) => unreachable!("returned above"),
     };
 
-    connector_row(ui, p, OpenNotebook::INITIALS, OpenNotebook::NAME, dot, &meta, |ui| {
-        if status == Some(connectors::Status::Connected) {
-            if theme::secondary_button(ui, p, "Re-check", !conn.checking.load(Ordering::Relaxed)).clicked() {
-                spawn_check(conn.clone());
+    let awaiting_reset_confirm = state.needs_reset_confirm.load(Ordering::Relaxed);
+
+    connector_row(ui, p, tool.initials(), tool.name(), dot, &meta, |ui| {
+        if awaiting_reset_confirm {
+            // Buttons live in the confirmation block below instead.
+        } else if status == Some(connectors::Status::Connected) {
+            if theme::secondary_button(ui, p, "Re-check", !state.checking.load(Ordering::Relaxed)).clicked() {
+                spawn_check(tool, conn.clone());
             }
         } else if show_connect {
-            if theme::primary_button(ui, p, "Connect", !conn.checking.load(Ordering::Relaxed)).clicked() {
-                spawn_connect(conn.clone());
+            if theme::primary_button(ui, p, "Connect", !state.checking.load(Ordering::Relaxed)).clicked() {
+                spawn_connect(tool, conn.clone(), false);
             }
         } else {
-            if theme::secondary_button(ui, p, "Re-check", !conn.checking.load(Ordering::Relaxed)).clicked() {
-                spawn_check(conn.clone());
+            if theme::secondary_button(ui, p, "Re-check", !state.checking.load(Ordering::Relaxed)).clicked() {
+                spawn_check(tool, conn.clone());
             }
         }
     });
 
     if status == Some(connectors::Status::NeedsKey) {
         ui.add_space(theme::GAP_XS);
-        let mut pw = conn.password.lock().unwrap().clone();
-        if ui.add(egui::TextEdit::singleline(&mut pw).password(true).hint_text("Admin password")).changed() {
-            *conn.password.lock().unwrap() = pw;
+        let mut pw = state.password.lock().unwrap().clone();
+        if ui.add(egui::TextEdit::singleline(&mut pw).password(true).hint_text(tool.key_label())).changed() {
+            *state.password.lock().unwrap() = pw;
         }
     }
 
-    // Only shown when a connect() in this session actually changed the
-    // default (not just re-confirmed it) - see ConnState::default_changed.
-    if status == Some(connectors::Status::Connected) && conn.default_changed.load(Ordering::Relaxed) {
+    // AnythingLLM only: connect() found that applying the change would
+    // delete every workspace's embedded documents and refused to write
+    // anything until confirmed (connectors::ConnectOutcome::NeedsResetConfirmation).
+    // Shown inline in the row, not a modal, per the coordinator's review.
+    if awaiting_reset_confirm {
         ui.add_space(theme::GAP_XS);
         ui.label(theme::rich(
-            "Default embedding model changed. Existing sources may need re-embedding for consistent search.",
+            "Connecting changes AnythingLLM's embedder. AnythingLLM will DELETE all embedded documents in every workspace; you must re-embed them.",
             theme::SIZE_CAPTION,
             Weight::Regular,
-            p.text_muted,
+            p.error,
         ));
+        ui.add_space(theme::GAP_XS);
+        ui.horizontal(|ui| {
+            if theme::secondary_button(ui, p, "Cancel", !state.checking.load(Ordering::Relaxed)).clicked() {
+                state.needs_reset_confirm.store(false, Ordering::Relaxed);
+            }
+            ui.add_space(theme::GAP_SM);
+            if theme::danger_button(ui, p, "Delete and connect", !state.checking.load(Ordering::Relaxed)).clicked() {
+                spawn_connect(tool, conn.clone(), true);
+            }
+        });
     }
 
-    ui.add_space(theme::GAP_SM);
-    let mut docker = conn.docker.load(Ordering::Relaxed);
-    if ui.checkbox(&mut docker, "Runs in Docker").changed() {
-        conn.docker.store(docker, Ordering::Relaxed);
+    // Surfaces a failed connect() (e.g. AnythingLLM's update-env validation
+    // error - see ToolState::last_error) inline, in the row.
+    if let Some(err) = state.last_error.lock().unwrap().clone() {
+        ui.add_space(theme::GAP_XS);
+        ui.label(theme::rich(err, theme::SIZE_CAPTION, Weight::Regular, p.error));
     }
+
+    // Only shown when a connect() in this session actually changed the
+    // embedding config (not just re-confirmed it) - see ToolState::changed.
+    if status == Some(connectors::Status::Connected) && state.changed.load(Ordering::Relaxed) {
+        ui.add_space(theme::GAP_XS);
+        ui.label(theme::rich(tool.changed_caption(), theme::SIZE_CAPTION, Weight::Regular, p.text_muted));
+    }
+
+    true
 }
 
 fn connections_screen(ui: &mut Ui, p: Palette, conn: &Arc<ConnState>) {
@@ -399,7 +493,28 @@ fn connections_screen(ui: &mut Ui, p: Palette, conn: &Arc<ConnState>) {
     theme::card(ui, p, |ui| {
         ui.label(theme::rich("Detected on this computer", theme::SIZE_BODY, Weight::SemiBold, p.text));
         ui.add_space(theme::GAP_MD);
-        open_notebook_row(ui, p, conn);
+        let mut shown_any = false;
+        for tool in Tool::ALL {
+            if shown_any {
+                ui.add_space(theme::GAP_MD);
+            }
+            if tool_row(ui, p, tool, conn) {
+                shown_any = true;
+            }
+        }
+        if !shown_any {
+            ui.label(theme::rich(
+                "None detected yet.",
+                theme::SIZE_CAPTION,
+                Weight::Regular,
+                p.text_muted,
+            ));
+        }
+        ui.add_space(theme::GAP_SM);
+        let mut docker = conn.docker.load(Ordering::Relaxed);
+        if ui.checkbox(&mut docker, "Runs in Docker").changed() {
+            conn.docker.store(docker, Ordering::Relaxed);
+        }
     });
 
     theme::card(ui, p, |ui| {

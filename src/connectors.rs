@@ -1,10 +1,12 @@
 //! Connector layer for the Connections screen (design/DESIGN.md).
 //!
-//! ponytail: only one tool (Open Notebook) actually talks over HTTP in this
-//! task, so this is a plain struct with `detect`/`status`/`connect` methods -
-//! not an enum/trait dispatch. Promote to an enum over `Tool` variants if/when
-//! a second HTTP-probed connector shows up; LibreChat/Dify below are
-//! "manual setup" only (no network calls), so they don't need the same shape.
+//! Three tools talk over HTTP (Open Notebook, Open WebUI, AnythingLLM), each
+//! as its own plain struct with `detect`/`status`/`connect` methods - same
+//! shape as before, just three of them now. `Tool` is the promised thin
+//! match-based dispatcher over the three, for GUI code that wants to loop
+//! over "all HTTP-probed tools" without repeating itself three times.
+//! LibreChat/Dify below are still "manual setup" only (no network calls), so
+//! they don't need the same shape and aren't part of `Tool`.
 //!
 //! HTTP client: `ureq` (blocking, rustls). It was already resolved
 //! transitively via hf-hub's sync API (see Cargo.lock before this change),
@@ -35,6 +37,119 @@ pub fn embedding_url(port: &str, docker: bool) -> String {
 
 fn agent(timeout: Duration) -> ureq::Agent {
     ureq::AgentBuilder::new().timeout(timeout).build()
+}
+
+/// The three HTTP-probed connectors, for GUI code that wants to loop over
+/// "all detectable tools" instead of repeating the same row logic three
+/// times. Each variant just forwards to that tool's own struct - see the
+/// `OpenNotebook`/`OpenWebUi`/`AnythingLlm` impls below for the actual logic
+/// and source citations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tool {
+    OpenNotebook,
+    OpenWebUi,
+    AnythingLlm,
+}
+
+impl Tool {
+    pub const ALL: [Tool; 3] = [Tool::OpenNotebook, Tool::OpenWebUi, Tool::AnythingLlm];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Tool::OpenNotebook => OpenNotebook::NAME,
+            Tool::OpenWebUi => OpenWebUi::NAME,
+            Tool::AnythingLlm => AnythingLlm::NAME,
+        }
+    }
+
+    pub fn initials(self) -> &'static str {
+        match self {
+            Tool::OpenNotebook => OpenNotebook::INITIALS,
+            Tool::OpenWebUi => OpenWebUi::INITIALS,
+            Tool::AnythingLlm => AnythingLlm::INITIALS,
+        }
+    }
+
+    /// Base URL(s) to probe, in order - most tools have one, Open WebUI has
+    /// two common default ports.
+    pub fn candidate_base_urls(self) -> &'static [&'static str] {
+        match self {
+            Tool::OpenNotebook => &[OpenNotebook::DEFAULT_BASE_URL],
+            Tool::OpenWebUi => &[OpenWebUi::DEFAULT_BASE_URL, OpenWebUi::ALT_BASE_URL],
+            Tool::AnythingLlm => &[AnythingLlm::DEFAULT_BASE_URL],
+        }
+    }
+
+    /// Label for the password/API-key field on this tool's row.
+    pub fn key_label(self) -> &'static str {
+        match self {
+            Tool::OpenNotebook => "Admin password",
+            Tool::OpenWebUi => "Admin API key",
+            Tool::AnythingLlm => "API key",
+        }
+    }
+
+    /// "Needs a ..." meta-line phrasing (DESIGN.md: "Needs an admin API key").
+    pub fn needs_key_meta(self) -> &'static str {
+        match self {
+            Tool::OpenNotebook => "Needs a password",
+            Tool::OpenWebUi => "Needs an admin API key",
+            Tool::AnythingLlm => "Needs an API key",
+        }
+    }
+
+    /// Caption shown once `connect()` has actually changed the tool's
+    /// embedding engine/model in this session (gated the same way as
+    /// `ConnState::default_changed` in gui.rs).
+    pub fn changed_caption(self) -> &'static str {
+        match self {
+            Tool::OpenNotebook => {
+                "Default embedding model changed. Existing sources may need re-embedding for consistent search."
+            }
+            Tool::OpenWebUi => "Embedding model changed. Re-index your knowledge bases in Open WebUI.",
+            Tool::AnythingLlm => "Embedding model changed. Existing workspaces need to be re-embedded.",
+        }
+    }
+
+    pub fn detect(self, base_url: &str) -> bool {
+        match self {
+            Tool::OpenNotebook => OpenNotebook::detect(base_url),
+            Tool::OpenWebUi => OpenWebUi::detect(base_url),
+            Tool::AnythingLlm => AnythingLlm::detect(base_url),
+        }
+    }
+
+    pub fn status(self, base_url: &str, embed_url: &str, key: Option<&str>) -> Status {
+        match self {
+            Tool::OpenNotebook => OpenNotebook::status(base_url, embed_url, key),
+            Tool::OpenWebUi => OpenWebUi::status(base_url, embed_url, key),
+            Tool::AnythingLlm => AnythingLlm::status(base_url, embed_url, key),
+        }
+    }
+
+    /// `confirm_reset` only matters for `Tool::AnythingLlm` (see
+    /// `ConnectOutcome`/`AnythingLlm::plan` below) - Open Notebook and Open
+    /// WebUI's `connect()` never delete anything, so it's ignored for them.
+    pub fn connect(self, base_url: &str, embed_url: &str, key: Option<&str>, confirm_reset: bool) -> anyhow::Result<ConnectOutcome> {
+        match self {
+            Tool::OpenNotebook => OpenNotebook::connect(base_url, embed_url, key).map(ConnectOutcome::Done),
+            Tool::OpenWebUi => OpenWebUi::connect(base_url, embed_url, key).map(ConnectOutcome::Done),
+            Tool::AnythingLlm => AnythingLlm::connect(base_url, embed_url, key, confirm_reset),
+        }
+    }
+}
+
+/// Result of a `Tool::connect` call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectOutcome {
+    /// Connected (or already was) - `bool` is whether this call actually
+    /// wrote anything.
+    Done(bool),
+    /// AnythingLLM only: applying the change would delete every workspace's
+    /// embedded documents (see `AnythingLlm::plan`) and the caller didn't
+    /// pass `confirm_reset: true` - nothing was written. Re-call `connect`
+    /// with `confirm_reset: true` to proceed.
+    NeedsResetConfirmation,
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +493,372 @@ fn put_json<B: Serialize>(
 }
 
 // ---------------------------------------------------------------------------
+// Open WebUI
+//
+// Source: github.com/open-webui/open-webui @ 8bd8b4fac5e059578ac0c74b3c18d11139f88b7d (main, 2026-09-21)
+// - Mount:              app.include_router(retrieval.router, prefix="/api/v1/retrieval", ...)   (backend/open_webui/main.py:852)
+// - Fingerprint:        GET  /api/config -> {"status": true, "name": ..., "default_locale": ..., "features": {...}}, unauthenticated (backend/open_webui/main.py:2224-2225,2312-2316)
+// - Auth:                    Authorization: Bearer <admin API key or JWT>, admin-only routes 401 when missing/wrong/non-admin (backend/open_webui/utils/auth.py:383-388 get_http_authorization_cred, :625-630 get_admin_user)
+// - Read config:        GET  /api/v1/retrieval/embedding                                        (backend/open_webui/routers/retrieval.py:468-489)
+// - Write config:       POST /api/v1/retrieval/embedding/update {RAG_EMBEDDING_ENGINE, RAG_EMBEDDING_MODEL, RAG_EMBEDDING_BATCH_SIZE, ENABLE_ASYNC_EMBEDDING, RAG_EMBEDDING_CONCURRENT_REQUESTS, openai_config:{url,key}} (backend/open_webui/routers/retrieval.py:507-621)
+// ---------------------------------------------------------------------------
+
+pub struct OpenWebUi;
+
+impl OpenWebUi {
+    pub const NAME: &'static str = "Open WebUI";
+    pub const INITIALS: &'static str = "OW";
+    pub const DEFAULT_BASE_URL: &'static str = "http://127.0.0.1:8080";
+    /// Open WebUI's other very common default port (e.g. the `docker run`
+    /// one-liner in its README maps container :8080 to host :3000).
+    pub const ALT_BASE_URL: &'static str = "http://127.0.0.1:3000";
+    const MODEL_NAME: &'static str = "bge-m3";
+    /// `RAG_EMBEDDING_ENGINE` value for "OpenAI-compatible" (retrieval.py:551-553).
+    const ENGINE: &'static str = "openai";
+    /// Open WebUI's OpenAI-compatible embedding client sends this as a bearer
+    /// token; our server ignores auth entirely, but an empty string is a
+    /// worse default than an obvious placeholder.
+    const API_KEY_PLACEHOLDER: &'static str = "sk-local";
+
+    /// `GET /api/config` is public (no auth needed to view login-page
+    /// config) and returns a handful of Open-WebUI-specific keys together -
+    /// a bare port scan can't fake `status: true` + `default_locale` set.
+    pub fn detect(base_url: &str) -> bool {
+        let agent = agent(Duration::from_millis(1500));
+        match agent.get(&format!("{base_url}/api/config")).call() {
+            Ok(resp) => resp
+                .into_json::<OwuiConfigFingerprint>()
+                .map(|c| c.status && c.default_locale.is_some())
+                .unwrap_or(false),
+            Err(_) => false,
+        }
+    }
+
+    /// Connected when the engine is `openai` and its `openai_config.url`
+    /// already points at our `embed_url` - mirrors `OpenNotebook::status`'s
+    /// "credential base_url is the source of truth" approach. NeedsKey on a
+    /// 401 from the admin-only read; Found if the server answers but isn't
+    /// wired to us (or the read fails for any other reason).
+    pub fn status(base_url: &str, embed_url: &str, key: Option<&str>) -> Status {
+        if !Self::detect(base_url) {
+            return Status::NotFound;
+        }
+        let agent = agent(Duration::from_millis(1500));
+        let cfg = match get_json::<OwuiEmbeddingConfig>(&agent, base_url, "/api/v1/retrieval/embedding", key) {
+            Ok(c) => c,
+            Err(e) if matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Unauthorized)) => return Status::NeedsKey,
+            Err(_) => return Status::Found,
+        };
+        if cfg.rag_embedding_engine == Self::ENGINE
+            && cfg.openai_config.as_ref().and_then(|o| o.url.as_deref()) == Some(embed_url)
+        {
+            Status::Connected
+        } else {
+            Status::Found
+        }
+    }
+
+    /// Idempotent: a no-op (returns `Ok(false)`) when the engine/model/url
+    /// already match. Otherwise flips the engine to `openai` pointed at
+    /// `embed_url` with model `bge-m3`, preserving whatever batch-size/async
+    /// settings were already configured (Open WebUI has no partial-update
+    /// endpoint - the POST replaces the whole form, so unrelated fields are
+    /// read back first and forwarded unchanged rather than reset to their
+    /// pydantic defaults).
+    ///
+    /// Per DESIGN.md: switching the embedding engine means existing
+    /// knowledge bases need re-indexing in Open WebUI - this only flips the
+    /// config, it never triggers or performs that reindex itself.
+    pub fn connect(base_url: &str, embed_url: &str, key: Option<&str>) -> anyhow::Result<bool> {
+        let agent = agent(Duration::from_secs(5));
+        let cfg = get_json::<OwuiEmbeddingConfig>(&agent, base_url, "/api/v1/retrieval/embedding", key)?;
+        let already = cfg.rag_embedding_engine == Self::ENGINE
+            && cfg.rag_embedding_model == Self::MODEL_NAME
+            && cfg.openai_config.as_ref().and_then(|o| o.url.as_deref()) == Some(embed_url);
+        if already {
+            return Ok(false);
+        }
+        post_json::<_, Value>(
+            &agent,
+            base_url,
+            "/api/v1/retrieval/embedding/update",
+            key,
+            &OwuiUpdateEmbeddingReq {
+                openai_config: OwuiOpenAiConfig { url: embed_url, key: Self::API_KEY_PLACEHOLDER },
+                rag_embedding_engine: Self::ENGINE,
+                rag_embedding_model: Self::MODEL_NAME,
+                rag_embedding_batch_size: cfg.rag_embedding_batch_size,
+                enable_async_embedding: cfg.enable_async_embedding,
+                rag_embedding_concurrent_requests: cfg.rag_embedding_concurrent_requests,
+            },
+        )?;
+        Ok(true)
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct OwuiConfigFingerprint {
+    #[serde(default)]
+    status: bool,
+    #[serde(default)]
+    default_locale: Option<Value>,
+}
+
+#[derive(Deserialize, Default)]
+struct OwuiOpenAiConfigResp {
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OwuiEmbeddingConfig {
+    #[serde(rename = "RAG_EMBEDDING_ENGINE")]
+    rag_embedding_engine: String,
+    #[serde(rename = "RAG_EMBEDDING_MODEL")]
+    rag_embedding_model: String,
+    #[serde(rename = "RAG_EMBEDDING_BATCH_SIZE", default)]
+    rag_embedding_batch_size: Option<i64>,
+    #[serde(rename = "ENABLE_ASYNC_EMBEDDING", default)]
+    enable_async_embedding: Option<bool>,
+    #[serde(rename = "RAG_EMBEDDING_CONCURRENT_REQUESTS", default)]
+    rag_embedding_concurrent_requests: Option<i64>,
+    #[serde(default)]
+    openai_config: Option<OwuiOpenAiConfigResp>,
+}
+
+#[derive(Serialize)]
+struct OwuiOpenAiConfig<'a> {
+    url: &'a str,
+    key: &'a str,
+}
+
+#[derive(Serialize)]
+struct OwuiUpdateEmbeddingReq<'a> {
+    openai_config: OwuiOpenAiConfig<'a>,
+    #[serde(rename = "RAG_EMBEDDING_ENGINE")]
+    rag_embedding_engine: &'a str,
+    #[serde(rename = "RAG_EMBEDDING_MODEL")]
+    rag_embedding_model: &'a str,
+    #[serde(rename = "RAG_EMBEDDING_BATCH_SIZE")]
+    rag_embedding_batch_size: Option<i64>,
+    #[serde(rename = "ENABLE_ASYNC_EMBEDDING")]
+    enable_async_embedding: Option<bool>,
+    #[serde(rename = "RAG_EMBEDDING_CONCURRENT_REQUESTS")]
+    rag_embedding_concurrent_requests: Option<i64>,
+}
+
+// ---------------------------------------------------------------------------
+// AnythingLLM
+//
+// Source: github.com/Mintplex-Labs/anything-llm @ master (2026-09-25)
+// - Mount:              app.use("/api", apiRouter); developerEndpoints(app, apiRouter) -> apiSystemEndpoints(apiRouter) (server/index.js:51,81,97; server/endpoints/api/index.js:5,20)
+// - Fingerprint:        GET  /api/ping -> {"online": true}, unauthenticated                      (server/endpoints/system.js:83-85, mounted at /api via server/index.js:13,82)
+// - Auth:                    Authorization: Bearer <developer API key>; 403 {"error":"No valid api key found."} when missing/invalid (server/utils/middleware/validApiKey.js:4-24)
+// - Read settings:      GET  /api/v1/system -> {"settings": {EmbeddingEngine, EmbeddingBasePath, EmbeddingModelPref, EmbeddingModelMaxChunkLength, ...}} (server/endpoints/api/system/index.js:37-70; server/models/systemSettings.js:454,480-491)
+// - Write settings:     POST /api/v1/system/update-env {<Key>: <value>, ...} -> {newValues, error} (server/endpoints/api/system/index.js:106-149)
+// - Setting keys (-> env var): EmbeddingEngine->EMBEDDING_ENGINE, EmbeddingBasePath->EMBEDDING_BASE_PATH,
+//   EmbeddingModelPref->EMBEDDING_MODEL_PREF, EmbeddingModelMaxChunkLength->EMBEDDING_MODEL_MAX_CHUNK_LENGTH,
+//   GenericOpenAiEmbeddingApiKey->GENERIC_OPEN_AI_EMBEDDING_API_KEY               (server/utils/helpers/updateENV.js:247-282)
+// - Engine value:       "generic-openai" is a supported embedding engine        (server/utils/helpers/updateENV.js:1225-1240)
+//   and that engine's client reads EMBEDDING_BASE_PATH / EMBEDDING_MODEL_PREF / GENERIC_OPEN_AI_EMBEDDING_API_KEY (server/utils/EmbeddingEngines/genericOpenAi/index.js:7-20)
+// - Max chunk length:   AnythingLLM's own setting is EmbeddingModelMaxChunkLength (default 1000 tokens if unset,
+//   server/utils/helpers/index.js:579-588); bge-m3 supports up to 8192 tokens per input, so that's the value we set.
+// ---------------------------------------------------------------------------
+
+pub struct AnythingLlm;
+
+/// A planned `update-env` write. Order matters (see `AnythingLlm::plan`).
+pub struct AlWrite {
+    pub key: &'static str,
+    pub value: String,
+}
+
+/// What `AnythingLlm::connect` would do, computed by `plan()` so the GUI can
+/// ask for confirmation *before* anything destructive happens.
+pub struct AlPlan {
+    /// Ordered writes; empty means "already connected" (nothing to do).
+    pub writes: Vec<AlWrite>,
+    /// True when `EmbeddingEngine` and/or `EmbeddingModelPref` are actually
+    /// changing, which deletes every workspace's embedded documents - see
+    /// the citation on `AnythingLlm::plan` below.
+    pub triggers_reset: bool,
+}
+
+impl AnythingLlm {
+    pub const NAME: &'static str = "AnythingLLM";
+    pub const INITIALS: &'static str = "AL";
+    pub const DEFAULT_BASE_URL: &'static str = "http://127.0.0.1:3001";
+    const MODEL_NAME: &'static str = "bge-m3";
+    const ENGINE: &'static str = "generic-openai";
+    /// bge-m3's max input length in tokens (AnythingLLM's `EmbeddingModelMaxChunkLength`).
+    const MAX_CHUNK_LENGTH: &'static str = "8192";
+    /// AnythingLLM's generic-openai embedder sends this as a bearer token;
+    /// our server ignores auth entirely, but an obvious placeholder beats an
+    /// empty string (see `OpenWebUi::API_KEY_PLACEHOLDER` for the same call).
+    const API_KEY_PLACEHOLDER: &'static str = "sk-local";
+
+    /// `GET /api/ping` needs no auth - matches `{"online": true}` exactly,
+    /// same "small custom endpoint, exact shape" approach as the other two
+    /// tools' fingerprints.
+    pub fn detect(base_url: &str) -> bool {
+        let agent = agent(Duration::from_millis(1500));
+        match agent.get(&format!("{base_url}/api/ping")).call() {
+            Ok(resp) => resp.into_json::<AlPingResponse>().map(|r| r.online).unwrap_or(false),
+            Err(_) => false,
+        }
+    }
+
+    /// Connected when `EmbeddingEngine` is `generic-openai` and
+    /// `EmbeddingBasePath` already points at our `embed_url`. `/api/v1/system`
+    /// requires a developer API key (`validApiKey` -> 403, not 401, when
+    /// missing/wrong) -> NeedsKey; any other failure -> Found.
+    pub fn status(base_url: &str, embed_url: &str, key: Option<&str>) -> Status {
+        if !Self::detect(base_url) {
+            return Status::NotFound;
+        }
+        let agent = agent(Duration::from_millis(1500));
+        let settings = match get_json::<AlSystemResp>(&agent, base_url, "/api/v1/system", key) {
+            Ok(s) => s.settings,
+            Err(e) if matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Http(403))) => return Status::NeedsKey,
+            Err(_) => return Status::Found,
+        };
+        if settings.embedding_engine.as_deref() == Some(Self::ENGINE)
+            && settings.embedding_base_path.as_deref() == Some(embed_url)
+        {
+            Status::Connected
+        } else {
+            Status::Found
+        }
+    }
+
+    /// Reads current settings and works out exactly which keys `connect()`
+    /// would need to write, and whether doing so deletes data.
+    ///
+    /// `EmbeddingEngine` and `EmbeddingModelPref` both carry
+    /// `postUpdate: [handleVectorStoreReset]` (server/utils/helpers/updateENV.js:247-260),
+    /// and `handleVectorStoreReset` calls `resetAllVectorStores` whenever the
+    /// value actually *changes* (updateENV.js:1320-1336). `resetAllVectorStores`
+    /// purges the vector cache and deletes every `Document`/`DocumentVectors`
+    /// row and every workspace's vector-db namespace
+    /// (server/utils/vectorStore/resetAllVectorStores.js:11-46) - i.e. it wipes
+    /// all embedded documents in every workspace. So `triggers_reset` is true
+    /// only when engine or model would actually change; `EmbeddingBasePath`,
+    /// `EmbeddingModelMaxChunkLength` and `GenericOpenAiEmbeddingApiKey` have
+    /// no such hook and are always safe to write.
+    pub fn plan(base_url: &str, embed_url: &str, key: Option<&str>) -> anyhow::Result<AlPlan> {
+        let agent = agent(Duration::from_secs(5));
+        let settings = get_json::<AlSystemResp>(&agent, base_url, "/api/v1/system", key)?.settings;
+
+        let triggers_reset = settings.embedding_engine.as_deref() != Some(Self::ENGINE)
+            || settings.embedding_model_pref.as_deref() != Some(Self::MODEL_NAME);
+
+        // Safe fields first. `connect()` sends one write per key and stops
+        // at the first error, so listing the reset-triggering keys last
+        // means a validation failure on a safe field (e.g. `EmbeddingBasePath`
+        // failing AnythingLLM's Docker-loopback check) can never let a
+        // destructive write slip through beforehand.
+        let mut writes = Vec::new();
+        if settings.embedding_base_path.as_deref() != Some(embed_url) {
+            writes.push(AlWrite { key: "EmbeddingBasePath", value: embed_url.to_string() });
+        }
+        if settings.embedding_model_max_chunk_length.as_deref() != Some(Self::MAX_CHUNK_LENGTH) {
+            writes.push(AlWrite {
+                key: "EmbeddingModelMaxChunkLength",
+                value: Self::MAX_CHUNK_LENGTH.to_string(),
+            });
+        }
+        if !settings.generic_open_ai_embedding_api_key {
+            writes.push(AlWrite {
+                key: "GenericOpenAiEmbeddingApiKey",
+                value: Self::API_KEY_PLACEHOLDER.to_string(),
+            });
+        }
+        if triggers_reset {
+            writes.push(AlWrite { key: "EmbeddingEngine", value: Self::ENGINE.to_string() });
+            writes.push(AlWrite { key: "EmbeddingModelPref", value: Self::MODEL_NAME.to_string() });
+        }
+
+        Ok(AlPlan { writes, triggers_reset })
+    }
+
+    /// Idempotent and confirmation-gated: `plan()` first. If nothing would
+    /// change, no-op (`Done(false)`). If the plan would delete embedded
+    /// documents (`triggers_reset`) and `confirm_reset` isn't `true`,
+    /// returns `NeedsResetConfirmation` and writes *nothing at all* - not
+    /// even the safe fields, so a caller can't be surprised by a half-applied
+    /// change. Otherwise writes each planned key one request at a time (see
+    /// `plan()`'s ordering note) and stops at the first error, surfacing
+    /// `update-env`'s own `error` message (server/endpoints/api/system/index.js:106-149
+    /// returns `{newValues, error}`, `error` is `false` when there's none -
+    /// server/utils/helpers/updateENV.js:1477).
+    ///
+    /// Per DESIGN.md: switching the embedder means existing workspaces need
+    /// re-embedding in AnythingLLM - this never triggers or performs that
+    /// re-embed itself, only the (confirmed) config write.
+    pub fn connect(base_url: &str, embed_url: &str, key: Option<&str>, confirm_reset: bool) -> anyhow::Result<ConnectOutcome> {
+        let plan = Self::plan(base_url, embed_url, key)?;
+        if plan.writes.is_empty() {
+            return Ok(ConnectOutcome::Done(false));
+        }
+        if plan.triggers_reset && !confirm_reset {
+            return Ok(ConnectOutcome::NeedsResetConfirmation);
+        }
+
+        let agent = agent(Duration::from_secs(5));
+        for write in &plan.writes {
+            let mut body = serde_json::Map::new();
+            body.insert(write.key.to_string(), Value::String(write.value.clone()));
+            let resp = post_json::<_, AlUpdateEnvResp>(&agent, base_url, "/api/v1/system/update-env", key, &Value::Object(body))?;
+            if let Some(msg) = resp.error.as_str() {
+                let hint = if write.key == "EmbeddingBasePath" {
+                    format!("{msg} (if AnythingLLM runs in Docker, try the \"Runs in Docker\" toggle)")
+                } else {
+                    msg.to_string()
+                };
+                anyhow::bail!(hint);
+            }
+        }
+        Ok(ConnectOutcome::Done(true))
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct AlPingResponse {
+    #[serde(default)]
+    online: bool,
+}
+
+#[derive(Deserialize)]
+struct AlSystemResp {
+    settings: AlSettings,
+}
+
+#[derive(Deserialize, Default)]
+struct AlSettings {
+    #[serde(rename = "EmbeddingEngine", default)]
+    embedding_engine: Option<String>,
+    #[serde(rename = "EmbeddingBasePath", default)]
+    embedding_base_path: Option<String>,
+    #[serde(rename = "EmbeddingModelPref", default)]
+    embedding_model_pref: Option<String>,
+    #[serde(rename = "EmbeddingModelMaxChunkLength", default)]
+    embedding_model_max_chunk_length: Option<String>,
+    /// `!!process.env.GENERIC_OPEN_AI_EMBEDDING_API_KEY` - a presence
+    /// boolean, not the key itself (server/models/systemSettings.js:494-495).
+    #[serde(rename = "GenericOpenAiEmbeddingApiKey", default)]
+    generic_open_ai_embedding_api_key: bool,
+}
+
+/// `POST /api/v1/system/update-env` always answers 200 with
+/// `{newValues, error}`; `error` is the string of validation messages
+/// joined with `\n`, or JSON `false` when there's none (updateENV.js:1477).
+#[derive(Deserialize, Default)]
+struct AlUpdateEnvResp {
+    #[serde(default)]
+    error: Value,
+}
+
+// ---------------------------------------------------------------------------
 // Manual-setup tools (DESIGN.md "Other tools (manual setup)") - no HTTP probe,
 // just a name/initials and a ready-to-paste config snippet for the row's
 // "Copy config" button.
@@ -668,6 +1149,431 @@ mod tests {
         let s = state.lock().unwrap();
         assert_eq!(s.credentials.len(), 2);
         assert_eq!(s.models.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod owui_tests {
+    use super::*;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::get;
+    use axum::{Json, Router};
+    use std::sync::{Arc, Mutex};
+
+    /// Emulates just enough of Open WebUI's API (see citations above the
+    /// `OpenWebUi` impl) to drive `connect`/`status` against a real HTTP
+    /// server, without touching a real instance on :8080.
+    #[derive(Default)]
+    struct FakeState {
+        engine: String,
+        model: String,
+        openai_url: Option<String>,
+        openai_key: Option<String>,
+        batch_size: Option<i64>,
+        async_embedding: Option<bool>,
+        concurrent_requests: Option<i64>,
+        admin_key: Option<&'static str>,
+    }
+
+    type Shared = Arc<Mutex<FakeState>>;
+
+    /// `get_admin_user`: missing/wrong `Authorization: Bearer <token>` -> 401.
+    fn check_auth(state: &Shared, headers: &HeaderMap) -> Result<(), StatusCode> {
+        let Some(expected) = state.lock().unwrap().admin_key else {
+            return Ok(());
+        };
+        let ok = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            == Some(expected);
+        if ok { Ok(()) } else { Err(StatusCode::UNAUTHORIZED) }
+    }
+
+    async fn config() -> Json<Value> {
+        Json(serde_json::json!({"status": true, "name": "Open WebUI", "default_locale": "en-US", "features": {}}))
+    }
+
+    /// A generic server's `/api/config` (or whatever unrelated endpoint) -
+    /// used to prove `detect()` doesn't fire on just any JSON server.
+    async fn generic_config() -> Json<Value> {
+        Json(serde_json::json!({"status": true}))
+    }
+
+    async fn get_embedding(State(state): State<Shared>, headers: HeaderMap) -> Result<Json<Value>, StatusCode> {
+        check_auth(&state, &headers)?;
+        let s = state.lock().unwrap();
+        Ok(Json(serde_json::json!({
+            "status": true,
+            "RAG_EMBEDDING_ENGINE": s.engine,
+            "RAG_EMBEDDING_MODEL": s.model,
+            "RAG_EMBEDDING_BATCH_SIZE": s.batch_size,
+            "ENABLE_ASYNC_EMBEDDING": s.async_embedding,
+            "RAG_EMBEDDING_CONCURRENT_REQUESTS": s.concurrent_requests,
+            "openai_config": {"url": s.openai_url, "key": s.openai_key},
+            "ollama_config": {"url": Value::Null, "key": Value::Null},
+            "azure_openai_config": {"url": Value::Null, "key": Value::Null, "version": Value::Null},
+        })))
+    }
+
+    async fn update_embedding(
+        State(state): State<Shared>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> Result<Json<Value>, StatusCode> {
+        check_auth(&state, &headers)?;
+        let mut s = state.lock().unwrap();
+        s.engine = body["RAG_EMBEDDING_ENGINE"].as_str().unwrap_or_default().to_string();
+        s.model = body["RAG_EMBEDDING_MODEL"].as_str().unwrap_or_default().to_string();
+        s.openai_url = body["openai_config"]["url"].as_str().map(str::to_string);
+        s.openai_key = body["openai_config"]["key"].as_str().map(str::to_string);
+        s.batch_size = body["RAG_EMBEDDING_BATCH_SIZE"].as_i64();
+        s.async_embedding = body["ENABLE_ASYNC_EMBEDDING"].as_bool();
+        s.concurrent_requests = body["RAG_EMBEDDING_CONCURRENT_REQUESTS"].as_i64();
+        Ok(Json(serde_json::json!({"status": true})))
+    }
+
+    fn spawn_fake_server(admin_key: Option<&'static str>) -> (String, Shared) {
+        let mut init = FakeState::default();
+        init.admin_key = admin_key;
+        let state: Shared = Arc::new(Mutex::new(init));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base_url = format!("http://{addr}");
+
+        let app_state = state.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                let app = Router::new()
+                    .route("/api/config", get(config))
+                    .route("/api/v1/retrieval/embedding", get(get_embedding))
+                    .route("/api/v1/retrieval/embedding/update", axum::routing::post(update_embedding))
+                    .with_state(app_state);
+                axum::serve(listener, app).await.unwrap();
+            });
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        (base_url, state)
+    }
+
+    fn spawn_generic_server() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base_url = format!("http://{addr}");
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                let app = Router::new().route("/api/config", get(generic_config));
+                axum::serve(listener, app).await.unwrap();
+            });
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        base_url
+    }
+
+    #[test]
+    fn detect_matches_fingerprint_and_rejects_generic_server() {
+        let (base_url, _state) = spawn_fake_server(None);
+        assert!(OpenWebUi::detect(&base_url));
+        assert!(!OpenWebUi::detect(&spawn_generic_server()), "a /api/config without default_locale must not match");
+        assert!(!OpenWebUi::detect("http://127.0.0.1:1")); // nothing listening
+    }
+
+    #[test]
+    fn needs_key_without_admin_key() {
+        let (base_url, _state) = spawn_fake_server(Some("adminkey"));
+        let embed_url = "http://127.0.0.1:11435/v1";
+        assert_eq!(OpenWebUi::status(&base_url, embed_url, None), Status::NeedsKey);
+        assert!(OpenWebUi::connect(&base_url, embed_url, None).is_err());
+    }
+
+    #[test]
+    fn connect_is_idempotent_and_sets_openai_engine() {
+        let (base_url, state) = spawn_fake_server(Some("adminkey"));
+        let embed_url = "http://127.0.0.1:11435/v1";
+
+        assert_eq!(OpenWebUi::status(&base_url, embed_url, Some("adminkey")), Status::Found);
+
+        let changed = OpenWebUi::connect(&base_url, embed_url, Some("adminkey")).unwrap();
+        assert!(changed, "first connect must write the embedding config");
+        {
+            let s = state.lock().unwrap();
+            assert_eq!(s.engine, "openai");
+            assert_eq!(s.model, "bge-m3");
+            assert_eq!(s.openai_url.as_deref(), Some(embed_url));
+        }
+        assert_eq!(OpenWebUi::status(&base_url, embed_url, Some("adminkey")), Status::Connected);
+
+        // Second connect must not write anything and must report no change.
+        let changed = OpenWebUi::connect(&base_url, embed_url, Some("adminkey")).unwrap();
+        assert!(!changed, "second connect is a no-op");
+    }
+}
+
+#[cfg(test)]
+mod anythingllm_tests {
+    use super::*;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::routing::get;
+    use axum::{Json, Router};
+    use std::sync::{Arc, Mutex};
+
+    /// Emulates just enough of AnythingLLM's developer API (see citations
+    /// above the `AnythingLlm` impl) to drive `connect`/`status` against a
+    /// real HTTP server, without touching a real instance on :3001.
+    #[derive(Default)]
+    struct FakeState {
+        engine: String,
+        base_path: String,
+        model_pref: String,
+        max_chunk_length: String,
+        embedding_api_key: String,
+        dev_key: Option<&'static str>,
+        /// Number of `update-env` calls received - used to assert "wrote
+        /// nothing" without inspecting every field individually.
+        write_calls: u32,
+        /// When set, `EmbeddingBasePath` writes are rejected with this
+        /// message instead of applied - emulates `validDockerizedUrl`.
+        reject_base_path_with: Option<&'static str>,
+    }
+
+    type Shared = Arc<Mutex<FakeState>>;
+
+    /// `validApiKey`: missing/wrong `Authorization: Bearer <key>` -> 403
+    /// (not 401 - AnythingLLM's own convention, unlike the other two tools).
+    fn check_auth(state: &Shared, headers: &HeaderMap) -> Result<(), StatusCode> {
+        let Some(expected) = state.lock().unwrap().dev_key else {
+            return Ok(());
+        };
+        let ok = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            == Some(expected);
+        if ok { Ok(()) } else { Err(StatusCode::FORBIDDEN) }
+    }
+
+    async fn ping() -> Json<Value> {
+        Json(serde_json::json!({"online": true}))
+    }
+
+    /// A generic server's health endpoint - proves `detect()` doesn't fire
+    /// on any JSON body, only the exact `{"online": true}` shape.
+    async fn generic_ping() -> Json<Value> {
+        Json(serde_json::json!({"ok": true}))
+    }
+
+    async fn get_system(State(state): State<Shared>, headers: HeaderMap) -> Result<Json<Value>, StatusCode> {
+        check_auth(&state, &headers)?;
+        let s = state.lock().unwrap();
+        Ok(Json(serde_json::json!({
+            "settings": {
+                "EmbeddingEngine": s.engine,
+                "EmbeddingBasePath": s.base_path,
+                "EmbeddingModelPref": s.model_pref,
+                "EmbeddingModelMaxChunkLength": s.max_chunk_length,
+                "GenericOpenAiEmbeddingApiKey": !s.embedding_api_key.is_empty(),
+            }
+        })))
+    }
+
+    async fn update_env(
+        State(state): State<Shared>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> Result<Json<Value>, StatusCode> {
+        check_auth(&state, &headers)?;
+        let mut s = state.lock().unwrap();
+        s.write_calls += 1;
+        if let Some(v) = body["EmbeddingBasePath"].as_str() {
+            if let Some(msg) = s.reject_base_path_with {
+                // updateENV.js:1446-1449 - a validation error means this
+                // key's value is never applied.
+                return Ok(Json(serde_json::json!({"newValues": {}, "error": msg})));
+            }
+            s.base_path = v.to_string();
+        }
+        if let Some(v) = body["EmbeddingEngine"].as_str() {
+            s.engine = v.to_string();
+        }
+        if let Some(v) = body["EmbeddingModelPref"].as_str() {
+            s.model_pref = v.to_string();
+        }
+        if let Some(v) = body["EmbeddingModelMaxChunkLength"].as_str() {
+            s.max_chunk_length = v.to_string();
+        }
+        if let Some(v) = body["GenericOpenAiEmbeddingApiKey"].as_str() {
+            s.embedding_api_key = v.to_string();
+        }
+        Ok(Json(serde_json::json!({"newValues": body, "error": false})))
+    }
+
+    fn spawn_fake_server(dev_key: Option<&'static str>) -> (String, Shared) {
+        spawn_fake_server_with(dev_key, None)
+    }
+
+    fn spawn_fake_server_with(dev_key: Option<&'static str>, reject_base_path_with: Option<&'static str>) -> (String, Shared) {
+        let mut init = FakeState::default();
+        init.dev_key = dev_key;
+        init.reject_base_path_with = reject_base_path_with;
+        let state: Shared = Arc::new(Mutex::new(init));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base_url = format!("http://{addr}");
+
+        let app_state = state.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                let app = Router::new()
+                    .route("/api/ping", get(ping))
+                    .route("/api/v1/system", get(get_system))
+                    .route("/api/v1/system/update-env", axum::routing::post(update_env))
+                    .with_state(app_state);
+                axum::serve(listener, app).await.unwrap();
+            });
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        (base_url, state)
+    }
+
+    fn spawn_generic_server() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base_url = format!("http://{addr}");
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                let app = Router::new().route("/api/ping", get(generic_ping));
+                axum::serve(listener, app).await.unwrap();
+            });
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        base_url
+    }
+
+    #[test]
+    fn detect_matches_fingerprint_and_rejects_generic_server() {
+        let (base_url, _state) = spawn_fake_server(None);
+        assert!(AnythingLlm::detect(&base_url));
+        assert!(!AnythingLlm::detect(&spawn_generic_server()), "a /api/ping with a different body must not match");
+        assert!(!AnythingLlm::detect("http://127.0.0.1:1")); // nothing listening
+    }
+
+    #[test]
+    fn needs_key_without_dev_key() {
+        let (base_url, _state) = spawn_fake_server(Some("devkey"));
+        let embed_url = "http://127.0.0.1:11435/v1";
+        assert_eq!(AnythingLlm::status(&base_url, embed_url, None), Status::NeedsKey);
+        assert!(AnythingLlm::connect(&base_url, embed_url, None, false).is_err());
+    }
+
+    /// (a) Engine differs from ours -> the plan would delete every
+    /// workspace's embedded documents. Without `confirm_reset`, `connect()`
+    /// must refuse and write *nothing at all*, not even the safe fields.
+    #[test]
+    fn reset_triggering_change_without_confirmation_writes_nothing() {
+        let (base_url, state) = spawn_fake_server(Some("devkey"));
+        let embed_url = "http://127.0.0.1:11435/v1";
+
+        let plan = AnythingLlm::plan(&base_url, embed_url, Some("devkey")).unwrap();
+        assert!(plan.triggers_reset, "fresh server has no engine set, so engine must change");
+
+        let outcome = AnythingLlm::connect(&base_url, embed_url, Some("devkey"), false).unwrap();
+        assert_eq!(outcome, ConnectOutcome::NeedsResetConfirmation);
+
+        let s = state.lock().unwrap();
+        assert_eq!(s.write_calls, 0, "must not write anything before confirmation");
+        assert_eq!(s.engine, "");
+        assert_eq!(s.base_path, "");
+    }
+
+    /// (b) Same scenario, but confirmed - everything gets written and the
+    /// tool reports Connected afterwards.
+    #[test]
+    fn reset_triggering_change_with_confirmation_writes_everything() {
+        let (base_url, state) = spawn_fake_server(Some("devkey"));
+        let embed_url = "http://127.0.0.1:11435/v1";
+
+        assert_eq!(AnythingLlm::status(&base_url, embed_url, Some("devkey")), Status::Found);
+
+        let outcome = AnythingLlm::connect(&base_url, embed_url, Some("devkey"), true).unwrap();
+        assert_eq!(outcome, ConnectOutcome::Done(true));
+        {
+            let s = state.lock().unwrap();
+            assert_eq!(s.engine, "generic-openai");
+            assert_eq!(s.base_path, embed_url);
+            assert_eq!(s.model_pref, "bge-m3");
+            assert_eq!(s.max_chunk_length, "8192");
+        }
+        assert_eq!(AnythingLlm::status(&base_url, embed_url, Some("devkey")), Status::Connected);
+
+        // Second connect must not write anything and must report no change -
+        // no confirmation needed since nothing would change.
+        let outcome = AnythingLlm::connect(&base_url, embed_url, Some("devkey"), false).unwrap();
+        assert_eq!(outcome, ConnectOutcome::Done(false));
+    }
+
+    /// (c) Engine/model already match; only the base path differs (e.g. our
+    /// server's port changed). `plan()` must not touch the reset-triggering
+    /// keys at all, and `connect()` must proceed without any confirmation.
+    #[test]
+    fn base_path_only_change_needs_no_confirmation() {
+        let (base_url, state) = spawn_fake_server(Some("devkey"));
+        let old_embed_url = "http://127.0.0.1:11111/v1";
+        let new_embed_url = "http://127.0.0.1:22222/v1";
+
+        // Pre-seed the server as if a previous connect() already ran against
+        // a different port, so only EmbeddingBasePath is out of date.
+        AnythingLlm::connect(&base_url, old_embed_url, Some("devkey"), true).unwrap();
+        {
+            let mut s = state.lock().unwrap();
+            s.write_calls = 0;
+        }
+
+        let plan = AnythingLlm::plan(&base_url, new_embed_url, Some("devkey")).unwrap();
+        assert!(!plan.triggers_reset);
+        assert_eq!(plan.writes.len(), 1, "only EmbeddingBasePath should need writing");
+        assert_eq!(plan.writes[0].key, "EmbeddingBasePath");
+
+        let outcome = AnythingLlm::connect(&base_url, new_embed_url, Some("devkey"), false).unwrap();
+        assert_eq!(outcome, ConnectOutcome::Done(true));
+        let s = state.lock().unwrap();
+        assert_eq!(s.write_calls, 1, "must write exactly one key");
+        assert_eq!(s.base_path, new_embed_url);
+        assert_eq!(s.engine, "generic-openai", "engine must be left alone");
+        assert_eq!(s.model_pref, "bge-m3", "model must be left alone");
+    }
+
+    /// AnythingLLM's Docker loopback check rejects `EmbeddingBasePath` -
+    /// `connect()` must surface that message (with a hint about the "Runs in
+    /// Docker" toggle) instead of silently succeeding or panicking, and must
+    /// stop before ever reaching the reset-triggering keys.
+    #[test]
+    fn base_path_validation_error_is_surfaced_and_stops_before_reset() {
+        let (base_url, state) =
+            spawn_fake_server_with(Some("devkey"), Some("Port is not running a reachable service on loopback"));
+        let embed_url = "http://127.0.0.1:11435/v1";
+
+        let err = AnythingLlm::connect(&base_url, embed_url, Some("devkey"), true).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("loopback"), "original AnythingLLM message must be preserved: {msg}");
+        assert!(msg.contains("Runs in Docker"), "must hint at the Docker toggle: {msg}");
+
+        let s = state.lock().unwrap();
+        assert_eq!(s.write_calls, 1, "must stop at the first failing write");
+        assert_eq!(s.engine, "", "must never reach the reset-triggering keys");
     }
 }
 

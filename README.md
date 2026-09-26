@@ -87,6 +87,25 @@ To reproduce, run two servers on different ports and, with [Bun](https://bun.sh)
 BENCH_SOURCE=book.txt bun bench.ts native=11434 v3=11435
 ```
 
+### Concurrency: short queries vs. batch jobs
+
+A single request already keeps `BGE_PARALLEL` threads busy. When several clients call the
+server at once (e.g. a chat tool doing a bulk re-index while another tool sends a live search
+query), each concurrent multi-input request adds its own `BGE_PARALLEL` threads, and a short
+single-input query gets starved: measured median latency went from ~0.65 s (idle) to 7.4 s
+under one concurrent batch job and 47 s under three.
+
+`BGE_TOPLU_IZIN` (default 1) gates multi-input requests through a semaphore; a single-input
+request under ~512 characters (a typical search query) always skips the gate. This trades some
+batch throughput for short-query latency: gate permit 1 brought the median back to ~1.8 s at a
+cost of about 27% batch throughput, measured with 3 concurrent clients over 3 rotated rounds.
+
+To reproduce:
+
+```bash
+BENCH_SOURCE=book.txt bun lane-bench.ts gated=./target/release/bge-embed-rs.exe|1 ungated=./target/release/bge-embed-rs.exe|999
+```
+
 ## Build from source
 
 ```bash

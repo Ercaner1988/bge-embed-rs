@@ -383,6 +383,20 @@ async fn embeddings_handler(
     let text_count = inputs.len();
     let started = std::time::Instant::now();
     let model = state.model.clone();
+    // Iki serit: tek ve kisa metinli istek (arama sorgusu) kapiyi atlar; toplu istekler
+    // (Open Notebook) TOPLU_KAPI'dan birer birer gecer. Kapi yokken N eszamanli toplu istek
+    // N*parallel is parcacigi aciyordu ve kisa sorgu CPU'dan 1/(N*parallel+1) pay aliyordu
+    // (2026-09-25 olculdu: ayni sorgu yuk altinda 7,4 / 47 / 2,8 sn, bosken ~0,65 sn).
+    let _izin = if kisa_mi(&inputs) {
+        None
+    } else {
+        Some(
+            TOPLU_KAPI
+                .acquire()
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        )
+    };
     // Sequential embedding keeps only ~3 cores busy on candle's CPU backend (non-matmul ops
     // are single-threaded). Measured on an idle 6-core/12-thread Ryzen, 20 x ~1560-char
     // chunks, s/chunk: BGE_PARALLEL 1=4.23 2=3.00 3=2.32 4=1.91 6=1.96 -> default 4.
@@ -412,6 +426,27 @@ async fn embeddings_handler(
         object: "list",
         model: req.model,
     }))
+}
+
+/// Toplu isteklerin gectigi kapi; izin sayisi `BGE_TOPLU_IZIN` (ayar dugmesi).
+/// Olcum (2026-09-25, 3 istemci, sirasi degisen 3 tur, canli sunucu da yuklu):
+///   kapisiz  : kisa sorgu medyan ~5,6 sn · toplu 0,63 parca/sn
+///   izin = 1 : kisa sorgu medyan ~1,8 sn · toplu 0,46 parca/sn (-%27)
+/// Ust uste binen toplu istekler birbirinin bos is parcacigini kullaniyor; izin
+/// arttikca toplu verim geri gelir, kisa sorgu yavaslar.
+static TOPLU_KAPI: std::sync::LazyLock<tokio::sync::Semaphore> = std::sync::LazyLock::new(|| {
+    let izin = std::env::var("BGE_TOPLU_IZIN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n: &usize| n >= 1)
+        .unwrap_or(VARSAYILAN_TOPLU_IZIN);
+    tokio::sync::Semaphore::new(izin)
+});
+const VARSAYILAN_TOPLU_IZIN: usize = 1;
+
+/// Hizli serit: tek girdi ve arama sorgusu boyunda (~512 karakter; tipik sorgu 20-80).
+fn kisa_mi(inputs: &[String]) -> bool {
+    inputs.len() == 1 && inputs[0].chars().count() <= 512
 }
 
 async fn health() -> impl IntoResponse {
@@ -566,6 +601,14 @@ mod tests {
         let long = "kelime ".repeat(20_000);
         assert_eq!(tok.encode(long.as_str(), true).unwrap().get_ids().len(), 8192);
         assert!(tok.encode("kisa metin", true).unwrap().get_ids().len() < 10);
+    }
+
+    #[test]
+    fn kisa_serit_yalniz_tek_ve_kisa_girdi() {
+        assert!(kisa_mi(&["kök neden bulma".to_string()]));
+        assert!(!kisa_mi(&["a".to_string(), "b".to_string()]), "iki girdi toplu sayılır");
+        assert!(!kisa_mi(&["ş".repeat(513)]), "uzun tek girdi toplu sayılır");
+        assert!(!kisa_mi(&[]), "boş istek hızlı şeride girmez");
     }
 
     #[test]

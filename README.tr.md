@@ -87,6 +87,25 @@ Tekrarlamak için farklı portlarda iki sunucu çalıştırın ve [Bun](https://
 BENCH_SOURCE=book.txt bun bench.ts native=11434 v3=11435
 ```
 
+### Eşzamanlılık: kısa sorgular ve toplu işler
+
+Tek bir istek zaten `BGE_PARALLEL` kadar iş parçacığını meşgul ediyor. Birden fazla istemci
+sunucuyu aynı anda çağırdığında (ör. bir sohbet aracı toplu yeniden indeksleme yaparken başka bir
+araç canlı bir arama sorgusu gönderiyor), her eşzamanlı çok-girdili istek kendi `BGE_PARALLEL`
+iş parçacığını ekliyor ve kısa, tek-girdili bir sorgu aç kalıyor: ölçülen medyan gecikme boşta
+~0,65 sn'den, bir eşzamanlı toplu iş altında 7,4 sn'ye, üç eşzamanlı toplu iş altında 47 sn'ye çıktı.
+
+`BGE_TOPLU_IZIN` (varsayılan 1) çok-girdili istekleri bir semafordan geçiriyor; ~512 karakterin
+altındaki tek-girdili bir istek (tipik bir arama sorgusu) kapıyı her zaman atlıyor. Bu, kısa-sorgu
+gecikmesi karşılığında bir miktar toplu verimden ödün veriyor: izin 1 medyanı ~1,8 sn'ye
+düşürdü, bedeli 3 eşzamanlı istemciyle 3 dönen turda ölçülen yaklaşık %27 toplu verim kaybı.
+
+Tekrarlamak için:
+
+```bash
+BENCH_SOURCE=book.txt bun lane-bench.ts gated=./target/release/bge-embed-rs.exe|1 ungated=./target/release/bge-embed-rs.exe|999
+```
+
 ## Kaynaktan derleme
 
 ```bash

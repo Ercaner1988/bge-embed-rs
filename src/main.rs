@@ -34,6 +34,7 @@ use std::sync::{
 };
 use tokenizers::{Tokenizer, TruncationParams};
 
+mod autostart;
 mod connectors;
 mod gui;
 mod theme;

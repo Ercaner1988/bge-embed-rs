@@ -2,6 +2,7 @@
 //! Settings, switched by a bottom nav bar. All styling comes from
 //! `theme.rs` - no inline hex/spacing/radius/size literals here.
 
+use crate::autostart;
 use crate::connectors::{self, Tool};
 use crate::{effective_host, effective_parallel, effective_port, Phase, Status};
 use crate::theme::{self, Palette, Weight};
@@ -142,6 +143,10 @@ pub struct GuiApp {
     screen: Screen,
     prev_screen: Screen,
     conn: Arc<ConnState>,
+    /// Mirrors the registry (`autostart::is_enabled()`), read once at
+    /// startup; every write goes through `autostart::set_enabled` first so
+    /// this never drifts from what's actually registered.
+    autostart_enabled: bool,
 }
 
 impl GuiApp {
@@ -151,6 +156,7 @@ impl GuiApp {
             screen: Screen::Status,
             prev_screen: Screen::Status,
             conn: Arc::new(ConnState::default()),
+            autostart_enabled: autostart::is_enabled(),
         }
     }
 }
@@ -186,7 +192,7 @@ impl eframe::App for GuiApp {
                 match self.screen {
                     Screen::Status => status_screen(ui, p, &self.status, phase.as_ref()),
                     Screen::Connections => connections_screen(ui, p, &self.conn),
-                    Screen::Settings => settings_screen(ui, p),
+                    Screen::Settings => settings_screen(ui, p, &mut self.autostart_enabled),
                 }
 
                 // Flexible spacer pushes the nav bar to the bottom.
@@ -560,7 +566,7 @@ fn setting_row(ui: &mut Ui, p: Palette, label: &str, hint: &str, control_width: 
     });
 }
 
-fn settings_screen(ui: &mut Ui, p: Palette) {
+fn settings_screen(ui: &mut Ui, p: Palette, autostart_enabled: &mut bool) {
     ui.spacing_mut().item_spacing.y = theme::GAP_LG;
 
     theme::card(ui, p, |ui| {
@@ -604,10 +610,16 @@ fn settings_screen(ui: &mut Ui, p: Palette) {
             ui,
             p,
             "Start when I log in",
-            "Coming soon.",
+            "Opens bge-embed-rs automatically when you log in.",
             theme::TOGGLE_WIDTH,
             |ui| {
-                theme::toggle_static(ui, p, true);
+                if theme::toggle(ui, p, autostart_enabled).changed() {
+                    if let Err(e) = autostart::set_enabled(*autostart_enabled) {
+                        eprintln!("could not update start-on-login: {e}");
+                        // Reflect what's actually registered, not the failed intent.
+                        *autostart_enabled = autostart::is_enabled();
+                    }
+                }
             },
         );
     });

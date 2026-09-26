@@ -328,6 +328,25 @@ pub fn nav_tab(ui: &mut Ui, p: Palette, label: &str, active: bool, width: f32) -
 pub fn toggle_static(ui: &mut Ui, p: Palette, on: bool) -> Response {
     let size = Vec2::new(TOGGLE_WIDTH, TOGGLE_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    paint_toggle(ui, p, rect, on);
+    response
+}
+
+/// Interactive twin of `toggle_static`: same visuals, but clickable - flips
+/// `*on` and returns a `Response` whose `.changed()` is true iff it did, so
+/// callers can react (e.g. `autostart::set_enabled`) only on an actual click.
+pub fn toggle(ui: &mut Ui, p: Palette, on: &mut bool) -> Response {
+    let size = Vec2::new(TOGGLE_WIDTH, TOGGLE_HEIGHT);
+    let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    paint_toggle(ui, p, rect, *on);
+    response
+}
+
+fn paint_toggle(ui: &mut Ui, p: Palette, rect: egui::Rect, on: bool) {
     let track = if on { p.accent } else { p.text_muted };
     ui.painter().rect_filled(rect, CornerRadius::same(RADIUS_FULL), track);
     let knob_radius = 6.0; // "12 px knob" in DESIGN.md
@@ -338,7 +357,6 @@ pub fn toggle_static(ui: &mut Ui, p: Palette, on: bool) -> Response {
         rect.left() + pad + knob_radius
     };
     ui.painter().circle_filled(egui::pos2(cx, rect.center().y), knob_radius, p.bg_surface);
-    response
 }
 
 /// A small read-only "input" box (Port, Parallel threads): window bg, 1 px

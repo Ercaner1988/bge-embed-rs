@@ -547,9 +547,14 @@ fn main() -> Result<()> {
     }
 
     let native_options = eframe::NativeOptions {
+        // DX12 via wgpu, not glow/OpenGL - see the Cargo.toml comment on the
+        // `eframe` dependency (el-fihrist kural 9037960d582ebfe7: glow blanks
+        // to a black window on some Windows 11 + AMD/Intel-iGPU combinations).
+        renderer: eframe::Renderer::Wgpu,
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([480.0, 560.0])
-            .with_min_inner_size([480.0, 560.0]),
+            .with_min_inner_size([480.0, 560.0])
+            .with_transparent(false),
         ..Default::default()
     };
     eframe::run_native(

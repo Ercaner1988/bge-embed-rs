@@ -23,14 +23,15 @@ axum = "0.8"
 # machinery onto a plain std::thread for a couple of short-lived GET/POST
 # probes. tls-rustls avoids native-tls/OpenSSL; json for serde_json bodies.
 ureq = { version = "2", default-features = false, features = ["tls", "json", "gzip"] }
-# default-features off: eframe 0.36's default renderer switched from glow to
-# wgpu (0.29 defaulted to glow). wgpu's DX12 backend pulls the `windows` 0.62
-# crate while another dependency in this graph pins `windows-core` 0.58,
-# and the two versions of the ID3D12* interface traits don't unify - a real
-# `cargo check` failure (E0277, "multiple different versions of crate
-# `windows`"), not a lint. Selecting the glow renderer explicitly avoids
-# pulling wgpu/windows-0.62 at all.
-eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "x11", "wayland", "accesskit"] }
+# default-features off: glow (OpenGL) blanks to a black window on some
+# Windows 11 + AMD/Intel-integrated-GPU combinations (Wgl sRGB swap-chain
+# mismatch with DWM - el-fihrist kural 9037960d582ebfe7). wgpu's DX12 backend
+# is what's actually native to Windows' compositor, so it's used instead.
+# NOTE: wgpu's DX12 backend previously pulled `windows` 0.62 while another
+# dependency in this graph pinned `windows-core` 0.58 (E0277, "multiple
+# different versions of crate `windows`") - re-check this if bumping eframe
+# ever reintroduces that conflict.
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland", "accesskit"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_System_Registry", "Win32_Foundation"] }

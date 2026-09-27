@@ -95,10 +95,16 @@ Failed phase: model card shows the error message in `status.error`, pill = Faile
 1. Header row.
 2. **Card "Detected on this computer"** (title body/600, row gap 12). One row per detected tool:
    32 px circle avatar (window bg + border, 2-letter initials caption/600 muted) · info column
-   (tool name body/600 over meta row: 6 px status dot + caption muted text, gap 4) · button.
-   - connected → success dot, `Connected · localhost:5055`, secondary `Re-check`
+   (tool name body/600 over meta row: 6 px status dot + caption muted text, gap 4) · button(s).
+   - connected → success dot, `Connected · localhost:5055`, secondary `Disconnect` + secondary
+     `Re-check` (gap 8, `Disconnect` on the right)
    - needs a key → warning dot, `Needs an admin API key · localhost:8080`, primary `Connect`
    - found → muted dot, `Found · localhost:3001`, primary `Connect`
+
+   AnythingLLM's `Disconnect` (like its `Connect`) can need confirmation: reverting its embedder
+   deletes every workspace's embedded documents. Shown inline in the row - `Disconnect`/`Re-check`
+   are replaced by an error-coloured caption + `Cancel` / danger `Delete and disconnect` until the
+   user confirms or cancels, same layout as the connect-side confirmation.
 3. **Card "Other tools (manual setup)"**: same rows, muted dot, secondary `Copy config`
    (copies ready-to-paste settings).
 4. Note (caption, muted, wraps): `Tools running in Docker reach this server at
@@ -111,12 +117,17 @@ Failed phase: model card shows the error message in `status.error`, pill = Faile
 2. **Card "Server"**: setting rows (label body/500 over hint caption muted, wraps; control on
    the right, gap 12):
    - `Port` — hint `The address tools connect to. Restart required.` — input 88×32 (window bg,
-     border, radius 4, padding 8, body text).
+     border, radius 4, padding 8, body text). Read-only display of the effective value.
    - `Parallel threads` — hint `More threads = faster, but uses more CPU. 4 is a good default.` — input.
-3. **Card "Access & startup"**:
+     Read-only display of the effective value.
+3. **Card "Model"**: one setting row:
+   - `Model` — hint `Hugging Face repo id. Must be BGE-M3-architecture-compatible. Restart
+     required.` — input 200×32 (same look as the Server card's inputs), but editable: a real
+     `TextEdit`, not a read-only display. Saved on every edit; takes effect on next launch.
+4. **Card "Access & startup"**:
    - `Allow network and Docker access` — hint `Listens on all interfaces. No password - only
      enable on trusted networks.` — toggle (off).
    - `Start when I log in` — toggle (on).
    Toggle: 36×20, full radius, padding 4, 12 px knob in surface colour; track = accent when on,
    `text.muted` when off; knob right when on, left when off.
-4. Spacer, nav bar.
+5. Spacer, nav bar.

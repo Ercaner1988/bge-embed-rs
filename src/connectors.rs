@@ -137,6 +137,15 @@ impl Tool {
             Tool::AnythingLlm => AnythingLlm::connect(base_url, embed_url, key, confirm_reset),
         }
     }
+
+    /// `confirm_reset` only matters for `Tool::AnythingLlm`, same as `connect`.
+    pub fn disconnect(self, base_url: &str, embed_url: &str, key: Option<&str>, confirm_reset: bool) -> anyhow::Result<ConnectOutcome> {
+        match self {
+            Tool::OpenNotebook => OpenNotebook::disconnect(base_url, embed_url, key).map(ConnectOutcome::Done),
+            Tool::OpenWebUi => OpenWebUi::disconnect(base_url, embed_url, key).map(ConnectOutcome::Done),
+            Tool::AnythingLlm => AnythingLlm::disconnect(base_url, embed_url, key, confirm_reset),
+        }
+    }
 }
 
 /// Result of a `Tool::connect` call.
@@ -365,6 +374,32 @@ impl OpenNotebook {
             Err(e) => Err(e),
         }
     }
+
+    /// Removes bge-embed-rs's own credential - and, via Open Notebook's own
+    /// cascade delete, the model bound to it - if one exists; a no-op
+    /// (`Ok(false)`) if we were never connected. Never touches any other
+    /// credential or model.
+    ///
+    /// Open Notebook has no way to *clear* `default_embedding_model` - it's
+    /// in `REQUIRED_DEFAULTS` (api/routers/models.py:333-336: "required and
+    /// cannot be cleared, only reassigned"), so deleting our own
+    /// credential/model is the closest safe equivalent to "disconnect": the
+    /// default pointer is left dangling and the user picks a replacement in
+    /// Open Notebook's own UI, same as if nothing had ever been configured.
+    pub fn disconnect(base_url: &str, embed_url: &str, password: Option<&str>) -> anyhow::Result<bool> {
+        let agent = agent(Duration::from_secs(5));
+        let existing = get_json::<Vec<CredentialSummary>>(
+            &agent,
+            base_url,
+            "/api/credentials?provider=openai_compatible",
+            password,
+        )?;
+        let Some(cred) = existing.into_iter().find(|c| c.base_url.as_deref() == Some(embed_url)) else {
+            return Ok(false);
+        };
+        delete(&agent, base_url, &format!("/api/credentials/{}", cred.id), password)?;
+        Ok(true)
+    }
 }
 
 /// `"http://host:port/v1"` -> `"port"`, for the disambiguated model name.
@@ -492,6 +527,13 @@ fn put_json<B: Serialize>(
     Ok(resp.into_json::<Value>().unwrap_or(Value::Null))
 }
 
+fn delete(agent: &ureq::Agent, base_url: &str, path: &str, password: Option<&str>) -> anyhow::Result<()> {
+    auth(agent.delete(&format!("{base_url}{path}")), password)
+        .call()
+        .map_err(map_status)?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Open WebUI
 //
@@ -587,6 +629,37 @@ impl OpenWebUi {
                 openai_config: OwuiOpenAiConfig { url: embed_url, key: Self::API_KEY_PLACEHOLDER },
                 rag_embedding_engine: Self::ENGINE,
                 rag_embedding_model: Self::MODEL_NAME,
+                rag_embedding_batch_size: cfg.rag_embedding_batch_size,
+                enable_async_embedding: cfg.enable_async_embedding,
+                rag_embedding_concurrent_requests: cfg.rag_embedding_concurrent_requests,
+            },
+        )?;
+        Ok(true)
+    }
+
+    /// Reverts the embedding engine to Open WebUI's own built-in default -
+    /// empty engine string, meaning local sentence-transformers
+    /// (backend/open_webui/config.py:1002: `os.getenv('RAG_EMBEDDING_ENGINE', '')`)
+    /// - if it's currently pointed at us; a no-op (`Ok(false)`) otherwise.
+    /// Per DESIGN.md caption: existing knowledge bases need re-indexing in
+    /// Open WebUI after this, same as connecting.
+    pub fn disconnect(base_url: &str, embed_url: &str, key: Option<&str>) -> anyhow::Result<bool> {
+        let agent = agent(Duration::from_secs(5));
+        let cfg = get_json::<OwuiEmbeddingConfig>(&agent, base_url, "/api/v1/retrieval/embedding", key)?;
+        let connected = cfg.rag_embedding_engine == Self::ENGINE
+            && cfg.openai_config.as_ref().and_then(|o| o.url.as_deref()) == Some(embed_url);
+        if !connected {
+            return Ok(false);
+        }
+        post_json::<_, Value>(
+            &agent,
+            base_url,
+            "/api/v1/retrieval/embedding/update",
+            key,
+            &OwuiUpdateEmbeddingReq {
+                openai_config: OwuiOpenAiConfig { url: "", key: "" },
+                rag_embedding_engine: "",
+                rag_embedding_model: "",
                 rag_embedding_batch_size: cfg.rag_embedding_batch_size,
                 enable_async_embedding: cfg.enable_async_embedding,
                 rag_embedding_concurrent_requests: cfg.rag_embedding_concurrent_requests,
@@ -820,6 +893,36 @@ impl AnythingLlm {
         }
         Ok(ConnectOutcome::Done(true))
     }
+
+    /// Reverts `EmbeddingEngine` to AnythingLLM's own built-in default,
+    /// `"native"` (server/utils/helpers/updateENV.js uses it throughout as
+    /// the no-external-provider value), if currently pointed at us; a no-op
+    /// (`Done(false)`) otherwise. The revert is itself an engine *change*,
+    /// so it triggers the same vector-store reset as `connect` and is
+    /// gated by `confirm_reset` the same way (see `plan`'s citation).
+    pub fn disconnect(base_url: &str, embed_url: &str, key: Option<&str>, confirm_reset: bool) -> anyhow::Result<ConnectOutcome> {
+        let agent = agent(Duration::from_secs(5));
+        let settings = get_json::<AlSystemResp>(&agent, base_url, "/api/v1/system", key)?.settings;
+        let connected = settings.embedding_engine.as_deref() == Some(Self::ENGINE)
+            && settings.embedding_base_path.as_deref() == Some(embed_url);
+        if !connected {
+            return Ok(ConnectOutcome::Done(false));
+        }
+        if !confirm_reset {
+            return Ok(ConnectOutcome::NeedsResetConfirmation);
+        }
+        let resp = post_json::<_, AlUpdateEnvResp>(
+            &agent,
+            base_url,
+            "/api/v1/system/update-env",
+            key,
+            &serde_json::json!({ "EmbeddingEngine": "native" }),
+        )?;
+        if let Some(msg) = resp.error.as_str() {
+            anyhow::bail!(msg.to_string());
+        }
+        Ok(ConnectOutcome::Done(true))
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -1024,6 +1127,20 @@ mod tests {
         Ok(Json(serde_json::json!({"default_embedding_model": s.default_embedding_model})))
     }
 
+    /// Mirrors the real cascade-delete (api/routers/credentials.py:305-368):
+    /// deletes the credential and every model bound to it.
+    async fn delete_credential(
+        State(state): State<Shared>,
+        headers: HeaderMap,
+        axum::extract::Path(id): axum::extract::Path<String>,
+    ) -> Result<StatusCode, StatusCode> {
+        check_auth(&state, &headers)?;
+        let mut s = state.lock().unwrap();
+        s.credentials.retain(|(cid, _, _)| cid != &id);
+        s.models.retain(|(_, _, _, cred)| cred != &id);
+        Ok(StatusCode::OK)
+    }
+
     fn spawn_fake_server(password: Option<&'static str>) -> (String, Shared) {
         let mut init = FakeState::default();
         init.password = password;
@@ -1043,6 +1160,7 @@ mod tests {
                     .route("/api/credentials", get(list_credentials).post(create_credential))
                     .route("/api/models", get(list_models).post(create_model))
                     .route("/api/models/defaults", get(get_defaults).put(put_defaults))
+                    .route("/api/credentials/{id}", axum::routing::delete(delete_credential))
                     .with_state(app_state);
                 axum::serve(listener, app).await.unwrap();
             });
@@ -1149,6 +1267,35 @@ mod tests {
         let s = state.lock().unwrap();
         assert_eq!(s.credentials.len(), 2);
         assert_eq!(s.models.len(), 2);
+    }
+
+    #[test]
+    fn disconnect_removes_only_our_credential_and_model() {
+        let (base_url, state) = spawn_fake_server(None);
+        let embed_url = "http://127.0.0.1:11435/v1";
+
+        // A no-op when never connected.
+        assert!(!OpenNotebook::disconnect(&base_url, embed_url, None).unwrap());
+
+        OpenNotebook::connect(&base_url, embed_url, None).unwrap();
+        // A second, unrelated credential must survive the disconnect.
+        {
+            let mut s = state.lock().unwrap();
+            s.next_id += 1;
+            let other_id = format!("credential:{}", s.next_id);
+            s.credentials.push((other_id.clone(), "http://127.0.0.1:9999/v1".to_string(), "openai_compatible".to_string()));
+        }
+
+        assert!(OpenNotebook::disconnect(&base_url, embed_url, None).unwrap());
+
+        let s = state.lock().unwrap();
+        assert_eq!(s.credentials.len(), 1, "only the unrelated credential remains");
+        assert_eq!(s.credentials[0].1, "http://127.0.0.1:9999/v1");
+        assert!(s.models.is_empty(), "our model was cascade-deleted with our credential");
+        drop(s);
+
+        // Second disconnect is a no-op (our credential is already gone).
+        assert!(!OpenNotebook::disconnect(&base_url, embed_url, None).unwrap());
     }
 }
 
@@ -1313,6 +1460,27 @@ mod owui_tests {
         // Second connect must not write anything and must report no change.
         let changed = OpenWebUi::connect(&base_url, embed_url, Some("adminkey")).unwrap();
         assert!(!changed, "second connect is a no-op");
+    }
+
+    #[test]
+    fn disconnect_reverts_to_built_in_engine() {
+        let (base_url, state) = spawn_fake_server(Some("adminkey"));
+        let embed_url = "http://127.0.0.1:11435/v1";
+
+        // A no-op when never connected.
+        assert!(!OpenWebUi::disconnect(&base_url, embed_url, Some("adminkey")).unwrap());
+
+        OpenWebUi::connect(&base_url, embed_url, Some("adminkey")).unwrap();
+        assert!(OpenWebUi::disconnect(&base_url, embed_url, Some("adminkey")).unwrap());
+        {
+            let s = state.lock().unwrap();
+            assert_eq!(s.engine, "", "reverted to Open WebUI's own built-in default");
+            assert_eq!(s.openai_url.as_deref(), Some(""));
+        }
+        assert_eq!(OpenWebUi::status(&base_url, embed_url, Some("adminkey")), Status::Found);
+
+        // Second disconnect is a no-op (already reverted).
+        assert!(!OpenWebUi::disconnect(&base_url, embed_url, Some("adminkey")).unwrap());
     }
 }
 
@@ -1574,6 +1742,40 @@ mod anythingllm_tests {
         let s = state.lock().unwrap();
         assert_eq!(s.write_calls, 1, "must stop at the first failing write");
         assert_eq!(s.engine, "", "must never reach the reset-triggering keys");
+    }
+
+    #[test]
+    fn disconnect_needs_confirmation_then_reverts_to_native() {
+        let (base_url, state) = spawn_fake_server(Some("devkey"));
+        let embed_url = "http://127.0.0.1:11435/v1";
+
+        // A no-op when never connected - no confirmation needed either.
+        assert_eq!(
+            AnythingLlm::disconnect(&base_url, embed_url, Some("devkey"), false).unwrap(),
+            ConnectOutcome::Done(false)
+        );
+
+        AnythingLlm::connect(&base_url, embed_url, Some("devkey"), true).unwrap();
+
+        // Reverting the engine is itself a reset-triggering change.
+        assert_eq!(
+            AnythingLlm::disconnect(&base_url, embed_url, Some("devkey"), false).unwrap(),
+            ConnectOutcome::NeedsResetConfirmation
+        );
+        assert_eq!(state.lock().unwrap().engine, "generic-openai", "unconfirmed disconnect writes nothing");
+
+        assert_eq!(
+            AnythingLlm::disconnect(&base_url, embed_url, Some("devkey"), true).unwrap(),
+            ConnectOutcome::Done(true)
+        );
+        assert_eq!(state.lock().unwrap().engine, "native");
+        assert_eq!(AnythingLlm::status(&base_url, embed_url, Some("devkey")), Status::Found);
+
+        // Second disconnect is a no-op (already reverted).
+        assert_eq!(
+            AnythingLlm::disconnect(&base_url, embed_url, Some("devkey"), false).unwrap(),
+            ConnectOutcome::Done(false)
+        );
     }
 }
 

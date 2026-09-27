@@ -39,6 +39,9 @@ pub const PROGRESS_HEIGHT: f32 = 8.0;
 /// Settings screen input box size ("input 88x32" in DESIGN.md).
 pub const INPUT_WIDTH: f32 = 88.0;
 pub const INPUT_HEIGHT: f32 = 32.0;
+/// Wide enough for a Hugging Face repo id (e.g. "BAAI/bge-m3"); `INPUT_WIDTH`
+/// is sized for the Port/Parallel-threads numeric fields, too narrow here.
+pub const MODEL_INPUT_WIDTH: f32 = 200.0;
 /// Toggle switch size ("Toggle: 36x20" in DESIGN.md).
 pub const TOGGLE_WIDTH: f32 = 36.0;
 pub const TOGGLE_HEIGHT: f32 = 20.0;
@@ -357,6 +360,35 @@ fn paint_toggle(ui: &mut Ui, p: Palette, rect: egui::Rect, on: bool) {
         rect.left() + pad + knob_radius
     };
     ui.painter().circle_filled(egui::pos2(cx, rect.center().y), knob_radius, p.bg_surface);
+}
+
+/// Editable twin of `input_box` (Model): same look (window bg, 1 px border,
+/// radius 4, body text), but backed by egui's own `TextEdit` for real
+/// keyboard/cursor/selection/clipboard handling instead of hand-painted text.
+pub fn text_input(ui: &mut Ui, p: Palette, text: &mut String, size: Vec2) -> Response {
+    ui.scope(|ui| {
+        let visuals = &mut ui.style_mut().visuals;
+        let stroke = Stroke::new(BORDER_WIDTH, p.border);
+        for w in [
+            &mut visuals.widgets.inactive,
+            &mut visuals.widgets.hovered,
+            &mut visuals.widgets.active,
+        ] {
+            w.bg_fill = p.bg_window;
+            w.weak_bg_fill = p.bg_window;
+            w.bg_stroke = stroke;
+            w.corner_radius = CornerRadius::same(RADIUS_CONTROL);
+        }
+        visuals.selection.bg_fill = p.accent;
+        ui.add_sized(
+            size,
+            egui::TextEdit::singleline(text)
+                .font(font(SIZE_BODY, Weight::Regular))
+                .text_color(p.text)
+                .margin(Margin::symmetric(INSET_SM as i8, 0)),
+        )
+    })
+    .inner
 }
 
 /// A small read-only "input" box (Port, Parallel threads): window bg, 1 px

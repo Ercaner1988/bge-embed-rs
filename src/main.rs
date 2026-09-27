@@ -44,6 +44,12 @@ mod theme;
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: &str = "11435";
 const DEFAULT_PARALLEL: usize = 4;
+/// Only BGE-M3-architecture-compatible repos work: `EmbedModel::load` assumes
+/// an XLM-RoBERTa-style position-id offset (padding-based, not plain 0..len -
+/// see the POSITION-ID NOTE above) and a `pytorch_model.bin` weights file. A
+/// different architecture would load without error and silently produce
+/// wrong embeddings.
+const DEFAULT_MODEL: &str = "BAAI/bge-m3";
 
 /// Loopback only by default. BGE_HOST=0.0.0.0 exposes the server to your LAN
 /// and to Docker containers on Linux - there is no authentication.
@@ -61,6 +67,46 @@ fn effective_parallel() -> usize {
         .and_then(|v| v.parse().ok())
         .filter(|&n| n >= 1)
         .unwrap_or(DEFAULT_PARALLEL)
+}
+
+/// The per-user settings directory (`%APPDATA%\bge-embed-rs` on Windows,
+/// `$HOME/.config/bge-embed-rs` elsewhere) - created on first write.
+fn settings_dir() -> std::path::PathBuf {
+    #[cfg(windows)]
+    let base = std::env::var_os("APPDATA").map(std::path::PathBuf::from);
+    #[cfg(not(windows))]
+    let base = std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"));
+    base.unwrap_or_else(std::env::temp_dir).join("bge-embed-rs")
+}
+
+fn model_config_path() -> std::path::PathBuf {
+    settings_dir().join("model.txt")
+}
+
+/// `BGE_MODEL` env var wins (so `start.ps1`-style launchers stay in control);
+/// otherwise the Settings screen's last saved choice; otherwise `DEFAULT_MODEL`.
+fn effective_model() -> String {
+    if let Ok(v) = std::env::var("BGE_MODEL") {
+        if !v.trim().is_empty() {
+            return v;
+        }
+    }
+    if let Ok(saved) = std::fs::read_to_string(model_config_path()) {
+        let saved = saved.trim();
+        if !saved.is_empty() {
+            return saved.to_string();
+        }
+    }
+    DEFAULT_MODEL.to_string()
+}
+
+/// Persists the Settings screen's model field so it survives a restart.
+/// Takes effect on next launch only - loading a different model requires
+/// re-downloading it and re-initializing the encoder.
+fn save_model_setting(repo_id: &str) -> std::io::Result<()> {
+    let dir = settings_dir();
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("model.txt"), repo_id.trim())
 }
 
 /// Current phase of the server, shared with the GUI thread.
@@ -175,9 +221,10 @@ impl EmbedModel {
 
     async fn load(status: Arc<Status>) -> Result<Self> {
         let device = Device::Cpu;
-        println!("Loading BAAI/bge-m3 (downloaded from the Hugging Face hub on first run, ~2.2 GB)...");
+        let model_name = effective_model();
+        println!("Loading {model_name} (downloaded from the Hugging Face hub on first run if not cached)...");
         let api = Api::new()?;
-        let repo_id = Repo::new("BAAI/bge-m3".to_string(), RepoType::Model);
+        let repo_id = Repo::new(model_name, RepoType::Model);
         let repo = api.repo(repo_id.clone());
         // Same default cache location Api::new() uses (Cache::default()), so
         // an already-populated cache from a previous run is found unchanged.
@@ -185,7 +232,8 @@ impl EmbedModel {
 
         let config_path = Self::fetch(&repo, &cache, &repo_id, "config.json", &status).await?;
         let tokenizer_path = Self::fetch(&repo, &cache, &repo_id, "tokenizer.json", &status).await?;
-        // The BAAI/bge-m3 repo ships pytorch_model.bin only (no safetensors).
+        // Assumes the repo ships pytorch_model.bin (true for BAAI/bge-m3);
+        // a safetensors-only alternate model repo would fail to fetch here.
         let weights_path = Self::fetch(&repo, &cache, &repo_id, "pytorch_model.bin", &status).await?;
         status.set_phase(Phase::Loading);
 

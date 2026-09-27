@@ -4,7 +4,7 @@
 
 use crate::autostart;
 use crate::connectors::{self, Tool};
-use crate::{effective_host, effective_parallel, effective_port, Phase, Status};
+use crate::{effective_host, effective_model, effective_parallel, effective_port, Phase, Status};
 use crate::theme::{self, Palette, Weight};
 use eframe::egui::{self, Align, Color32, Layout, Ui};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,9 +18,19 @@ enum Screen {
     Settings,
 }
 
+/// Which action a row's inline "this deletes your data" confirmation (see
+/// `ToolState::pending_confirm`) belongs to - AnythingLLM only, for either
+/// direction (its engine revert on disconnect resets vector stores exactly
+/// like the engine change on connect does).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingConfirm {
+    Connect,
+    Disconnect,
+}
+
 /// Per-tool Connections-screen state, shared with the background thread that
-/// runs `detect`/`status`/`connect` off the GUI thread (they're blocking
-/// HTTP calls; see connectors.rs). One of these per `Tool` variant.
+/// runs `detect`/`status`/`connect`/`disconnect` off the GUI thread (they're
+/// blocking HTTP calls; see connectors.rs). One of these per `Tool` variant.
 struct ToolState {
     /// `None` until the first check completes ("Checking..." in the meantime).
     tool_status: Mutex<Option<connectors::Status>>,
@@ -29,17 +39,18 @@ struct ToolState {
     /// Which of `Tool::candidate_base_urls()` last answered `detect()` -
     /// `None` once a check has run and found nothing (`Status::NotFound`).
     base_url: Mutex<Option<&'static str>>,
-    /// True only when the last `connect()` in this session actually changed
-    /// the tool's embedding engine/model (not just re-confirmed it) - gates
-    /// the re-index/re-embed caption.
+    /// True only when the last `connect()`/`disconnect()` in this session
+    /// actually changed the tool's embedding engine/model (not just
+    /// re-confirmed or no-op'd) - gates the re-index/re-embed caption.
     changed: AtomicBool,
-    /// Set when the last `connect()` attempt came back
+    /// Set when the last `connect()`/`disconnect()` attempt came back
     /// `ConnectOutcome::NeedsResetConfirmation` (AnythingLLM only) - the row
     /// shows an inline "this deletes your data" confirmation instead of the
-    /// normal action button until the user confirms or cancels.
-    needs_reset_confirm: AtomicBool,
-    /// Error message from the last failed `connect()` (e.g. AnythingLLM's
-    /// `update-env` validation error), shown inline in `status.error` colour.
+    /// normal action buttons until the user confirms or cancels.
+    pending_confirm: Mutex<Option<PendingConfirm>>,
+    /// Error message from the last failed `connect()`/`disconnect()` (e.g.
+    /// AnythingLLM's `update-env` validation error), shown inline in
+    /// `status.error` colour.
     last_error: Mutex<Option<String>>,
 }
 
@@ -51,7 +62,7 @@ impl Default for ToolState {
             password: Mutex::new(String::new()),
             base_url: Mutex::new(None),
             changed: AtomicBool::new(false),
-            needs_reset_confirm: AtomicBool::new(false),
+            pending_confirm: Mutex::new(None),
             last_error: Mutex::new(None),
         }
     }
@@ -87,7 +98,7 @@ fn spawn_check(tool: Tool, conn: Arc<ConnState>) {
         let base_url = tool.candidate_base_urls().iter().find(|u| tool.detect(u)).copied();
         *state.base_url.lock().unwrap() = base_url;
         *state.last_error.lock().unwrap() = None;
-        state.needs_reset_confirm.store(false, Ordering::Relaxed);
+        *state.pending_confirm.lock().unwrap() = None;
         let status = match base_url {
             Some(base_url) => {
                 let pw = state.password.lock().unwrap().clone();
@@ -120,13 +131,49 @@ fn spawn_connect(tool: Tool, conn: Arc<ConnState>, confirm_reset: bool) {
         let pw = state.password.lock().unwrap().clone();
         let pw_opt = if pw.is_empty() { None } else { Some(pw.as_str()) };
         *state.last_error.lock().unwrap() = None;
-        state.needs_reset_confirm.store(false, Ordering::Relaxed);
+        *state.pending_confirm.lock().unwrap() = None;
         match tool.connect(base_url, &embed_url, pw_opt, confirm_reset) {
             Ok(connectors::ConnectOutcome::Done(changed)) => {
                 state.changed.store(changed, Ordering::Relaxed);
             }
             Ok(connectors::ConnectOutcome::NeedsResetConfirmation) => {
-                state.needs_reset_confirm.store(true, Ordering::Relaxed);
+                *state.pending_confirm.lock().unwrap() = Some(PendingConfirm::Connect);
+            }
+            Err(e) => {
+                *state.last_error.lock().unwrap() = Some(e.to_string());
+            }
+        }
+        let status = tool.status(base_url, &embed_url, pw_opt);
+        *state.tool_status.lock().unwrap() = Some(status);
+        state.checking.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Spawns a background thread to run `tool`'s `disconnect()`, then re-checks
+/// status. `confirm_reset` is only meaningful for AnythingLLM, same as
+/// `spawn_connect`.
+fn spawn_disconnect(tool: Tool, conn: Arc<ConnState>, confirm_reset: bool) {
+    let state = &conn.tools[tool_index(tool)];
+    if state.checking.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let state = &conn.tools[tool_index(tool)];
+        let Some(base_url) = *state.base_url.lock().unwrap() else {
+            state.checking.store(false, Ordering::SeqCst);
+            return;
+        };
+        let embed_url = connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
+        let pw = state.password.lock().unwrap().clone();
+        let pw_opt = if pw.is_empty() { None } else { Some(pw.as_str()) };
+        *state.last_error.lock().unwrap() = None;
+        *state.pending_confirm.lock().unwrap() = None;
+        match tool.disconnect(base_url, &embed_url, pw_opt, confirm_reset) {
+            Ok(connectors::ConnectOutcome::Done(changed)) => {
+                state.changed.store(changed, Ordering::Relaxed);
+            }
+            Ok(connectors::ConnectOutcome::NeedsResetConfirmation) => {
+                *state.pending_confirm.lock().unwrap() = Some(PendingConfirm::Disconnect);
             }
             Err(e) => {
                 *state.last_error.lock().unwrap() = Some(e.to_string());
@@ -147,6 +194,10 @@ pub struct GuiApp {
     /// startup; every write goes through `autostart::set_enabled` first so
     /// this never drifts from what's actually registered.
     autostart_enabled: bool,
+    /// The Settings screen's Model field. Seeded from `effective_model()` at
+    /// startup; edits are saved via `save_model_setting` and take effect on
+    /// next launch (the running server keeps whatever model it already loaded).
+    model_input: String,
 }
 
 impl GuiApp {
@@ -157,6 +208,7 @@ impl GuiApp {
             prev_screen: Screen::Status,
             conn: Arc::new(ConnState::default()),
             autostart_enabled: autostart::is_enabled(),
+            model_input: effective_model(),
         }
     }
 }
@@ -192,7 +244,9 @@ impl eframe::App for GuiApp {
                 match self.screen {
                     Screen::Status => status_screen(ui, p, &self.status, phase.as_ref()),
                     Screen::Connections => connections_screen(ui, p, &self.conn),
-                    Screen::Settings => settings_screen(ui, p, &mut self.autostart_enabled),
+                    Screen::Settings => {
+                        settings_screen(ui, p, &mut self.autostart_enabled, &mut self.model_input)
+                    }
                 }
 
                 // Flexible spacer pushes the nav bar to the bottom.
@@ -273,7 +327,12 @@ fn status_screen(ui: &mut Ui, p: Palette, status: &Status, phase: Option<&Phase>
 fn model_card_body(ui: &mut Ui, p: Palette, phase: Option<&Phase>) {
     let fraction = phase.and_then(Phase::fraction);
     ui.horizontal(|ui| {
-        ui.label(theme::rich("Model \u{b7} BAAI/bge-m3", theme::SIZE_BODY, Weight::SemiBold, p.text));
+        ui.label(theme::rich(
+            format!("Model \u{b7} {}", effective_model()),
+            theme::SIZE_BODY,
+            Weight::SemiBold,
+            p.text,
+        ));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let right = match phase {
                 Some(Phase::Downloading { .. }) => match fraction {
@@ -424,21 +483,26 @@ fn tool_row(ui: &mut Ui, p: Palette, tool: Tool, conn: &Arc<ConnState>) -> bool 
         Some(connectors::Status::NotFound) => unreachable!("returned above"),
     };
 
-    let awaiting_reset_confirm = state.needs_reset_confirm.load(Ordering::Relaxed);
+    let pending_confirm = *state.pending_confirm.lock().unwrap();
 
     connector_row(ui, p, tool.initials(), tool.name(), dot, &meta, |ui| {
-        if awaiting_reset_confirm {
+        let enabled = !state.checking.load(Ordering::Relaxed);
+        if pending_confirm.is_some() {
             // Buttons live in the confirmation block below instead.
         } else if status == Some(connectors::Status::Connected) {
-            if theme::secondary_button(ui, p, "Re-check", !state.checking.load(Ordering::Relaxed)).clicked() {
+            if theme::secondary_button(ui, p, "Disconnect", enabled).clicked() {
+                spawn_disconnect(tool, conn.clone(), false);
+            }
+            ui.add_space(theme::GAP_SM);
+            if theme::secondary_button(ui, p, "Re-check", enabled).clicked() {
                 spawn_check(tool, conn.clone());
             }
         } else if show_connect {
-            if theme::primary_button(ui, p, "Connect", !state.checking.load(Ordering::Relaxed)).clicked() {
+            if theme::primary_button(ui, p, "Connect", enabled).clicked() {
                 spawn_connect(tool, conn.clone(), false);
             }
         } else {
-            if theme::secondary_button(ui, p, "Re-check", !state.checking.load(Ordering::Relaxed)).clicked() {
+            if theme::secondary_button(ui, p, "Re-check", enabled).clicked() {
                 spawn_check(tool, conn.clone());
             }
         }
@@ -452,40 +516,52 @@ fn tool_row(ui: &mut Ui, p: Palette, tool: Tool, conn: &Arc<ConnState>) -> bool 
         }
     }
 
-    // AnythingLLM only: connect() found that applying the change would
-    // delete every workspace's embedded documents and refused to write
-    // anything until confirmed (connectors::ConnectOutcome::NeedsResetConfirmation).
+    // AnythingLLM only: connect()/disconnect() found that applying the
+    // change would delete every workspace's embedded documents and refused
+    // to write anything until confirmed (ConnectOutcome::NeedsResetConfirmation).
     // Shown inline in the row, not a modal, per the coordinator's review.
-    if awaiting_reset_confirm {
+    if let Some(action) = pending_confirm {
+        let (warning, action_label): (&str, &str) = match action {
+            PendingConfirm::Connect => (
+                "Connecting changes AnythingLLM's embedder. AnythingLLM will DELETE all embedded documents in every workspace; you must re-embed them.",
+                "Delete and connect",
+            ),
+            PendingConfirm::Disconnect => (
+                "Disconnecting reverts AnythingLLM's embedder to its built-in default. AnythingLLM will DELETE all embedded documents in every workspace; you must re-embed them.",
+                "Delete and disconnect",
+            ),
+        };
         ui.add_space(theme::GAP_XS);
-        ui.label(theme::rich(
-            "Connecting changes AnythingLLM's embedder. AnythingLLM will DELETE all embedded documents in every workspace; you must re-embed them.",
-            theme::SIZE_CAPTION,
-            Weight::Regular,
-            p.error,
-        ));
+        ui.label(theme::rich(warning, theme::SIZE_CAPTION, Weight::Regular, p.error));
         ui.add_space(theme::GAP_XS);
         ui.horizontal(|ui| {
             if theme::secondary_button(ui, p, "Cancel", !state.checking.load(Ordering::Relaxed)).clicked() {
-                state.needs_reset_confirm.store(false, Ordering::Relaxed);
+                *state.pending_confirm.lock().unwrap() = None;
             }
             ui.add_space(theme::GAP_SM);
-            if theme::danger_button(ui, p, "Delete and connect", !state.checking.load(Ordering::Relaxed)).clicked() {
-                spawn_connect(tool, conn.clone(), true);
+            if theme::danger_button(ui, p, action_label, !state.checking.load(Ordering::Relaxed)).clicked() {
+                match action {
+                    PendingConfirm::Connect => spawn_connect(tool, conn.clone(), true),
+                    PendingConfirm::Disconnect => spawn_disconnect(tool, conn.clone(), true),
+                }
             }
         });
     }
 
-    // Surfaces a failed connect() (e.g. AnythingLLM's update-env validation
-    // error - see ToolState::last_error) inline, in the row.
+    // Surfaces a failed connect()/disconnect() (e.g. AnythingLLM's
+    // update-env validation error - see ToolState::last_error) inline, in
+    // the row.
     if let Some(err) = state.last_error.lock().unwrap().clone() {
         ui.add_space(theme::GAP_XS);
         ui.label(theme::rich(err, theme::SIZE_CAPTION, Weight::Regular, p.error));
     }
 
-    // Only shown when a connect() in this session actually changed the
-    // embedding config (not just re-confirmed it) - see ToolState::changed.
-    if status == Some(connectors::Status::Connected) && state.changed.load(Ordering::Relaxed) {
+    // Only shown when a connect()/disconnect() in this session actually
+    // changed the embedding config (not just re-confirmed or no-op'd it) -
+    // see ToolState::changed. Not gated on `status` - a successful
+    // disconnect moves status away from Connected, but the caption is just
+    // as relevant then.
+    if state.changed.load(Ordering::Relaxed) {
         ui.add_space(theme::GAP_XS);
         ui.label(theme::rich(tool.changed_caption(), theme::SIZE_CAPTION, Weight::Regular, p.text_muted));
     }
@@ -566,7 +642,7 @@ fn setting_row(ui: &mut Ui, p: Palette, label: &str, hint: &str, control_width: 
     });
 }
 
-fn settings_screen(ui: &mut Ui, p: Palette, autostart_enabled: &mut bool) {
+fn settings_screen(ui: &mut Ui, p: Palette, autostart_enabled: &mut bool, model_input: &mut String) {
     ui.spacing_mut().item_spacing.y = theme::GAP_LG;
 
     theme::card(ui, p, |ui| {
@@ -590,6 +666,25 @@ fn settings_screen(ui: &mut Ui, p: Palette, autostart_enabled: &mut bool) {
             theme::INPUT_WIDTH,
             |ui| {
                 theme::input_box(ui, p, &effective_parallel().to_string(), input_size);
+            },
+        );
+    });
+
+    theme::card(ui, p, |ui| {
+        ui.spacing_mut().item_spacing.y = theme::GAP_MD;
+        setting_row(
+            ui,
+            p,
+            "Model",
+            "Hugging Face repo id. Must be BGE-M3-architecture-compatible. Restart required.",
+            theme::MODEL_INPUT_WIDTH,
+            |ui| {
+                let size = egui::Vec2::new(theme::MODEL_INPUT_WIDTH, theme::INPUT_HEIGHT);
+                if theme::text_input(ui, p, model_input, size).changed() {
+                    if let Err(e) = crate::save_model_setting(model_input) {
+                        eprintln!("could not save model setting: {e}");
+                    }
+                }
             },
         );
     });

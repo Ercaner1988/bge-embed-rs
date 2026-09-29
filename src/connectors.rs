@@ -375,17 +375,16 @@ impl OpenNotebook {
         }
     }
 
-    /// Removes bge-embed-rs's own credential - and, via Open Notebook's own
-    /// cascade delete, the model bound to it - if one exists; a no-op
-    /// (`Ok(false)`) if we were never connected. Never touches any other
-    /// credential or model.
+    /// Removes the credential *we* created (name `CREDENTIAL_NAME` and our
+    /// `embed_url`) - and, via Open Notebook's cascade delete, its model; a
+    /// no-op (`Ok(false)`) if there is none. A user's own credential pointing
+    /// at the same URL is never deleted: matching on URL alone once deleted a
+    /// hand-made credential and its default embedding model.
     ///
-    /// Open Notebook has no way to *clear* `default_embedding_model` - it's
-    /// in `REQUIRED_DEFAULTS` (api/routers/models.py:333-336: "required and
-    /// cannot be cleared, only reassigned"), so deleting our own
-    /// credential/model is the closest safe equivalent to "disconnect": the
-    /// default pointer is left dangling and the user picks a replacement in
-    /// Open Notebook's own UI, same as if nothing had ever been configured.
+    /// Refuses while our model is the default embedding model: Open Notebook
+    /// can't clear that default (api/routers/models.py:333-336), so deleting
+    /// the model would leave it dangling and every later embedding job would
+    /// fail. The user picks another default in Open Notebook first.
     pub fn disconnect(base_url: &str, embed_url: &str, password: Option<&str>) -> anyhow::Result<bool> {
         let agent = agent(Duration::from_secs(5));
         let existing = get_json::<Vec<CredentialSummary>>(
@@ -394,9 +393,23 @@ impl OpenNotebook {
             "/api/credentials?provider=openai_compatible",
             password,
         )?;
-        let Some(cred) = existing.into_iter().find(|c| c.base_url.as_deref() == Some(embed_url)) else {
+        let Some(cred) = existing
+            .into_iter()
+            .find(|c| c.base_url.as_deref() == Some(embed_url) && c.name.as_deref() == Some(Self::CREDENTIAL_NAME))
+        else {
             return Ok(false);
         };
+        let defaults = get_json::<DefaultModels>(&agent, base_url, "/api/models/defaults", password)?;
+        let models = get_json::<Vec<ModelSummary>>(&agent, base_url, "/api/models?type=embedding", password)?;
+        let ours_is_default = models.iter().any(|m| {
+            m.credential.as_deref() == Some(cred.id.as_str())
+                && defaults.default_embedding_model.as_deref() == Some(m.id.as_str())
+        });
+        if ours_is_default {
+            anyhow::bail!(
+                "bge-m3 is Open Notebook's default embedding model. Pick another default in Open Notebook (Settings > Models) first, then disconnect."
+            );
+        }
         delete(&agent, base_url, &format!("/api/credentials/{}", cred.id), password)?;
         Ok(true)
     }
@@ -416,6 +429,8 @@ struct RootResponse {
 #[derive(Deserialize)]
 struct CredentialSummary {
     id: String,
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default)]
     base_url: Option<String>,
 }
@@ -1019,7 +1034,7 @@ mod tests {
     /// server, without touching the actual instance on :5055.
     #[derive(Default)]
     struct FakeState {
-        credentials: Vec<(String, String, String)>,     // (id, base_url, provider)
+        credentials: Vec<(String, String, String, String)>, // (id, base_url, provider, name)
         models: Vec<(String, String, String, String)>,  // (id, name, provider, credential)
         default_embedding_model: Option<String>,
         next_id: u32,
@@ -1056,8 +1071,8 @@ mod tests {
         let items: Vec<_> = s
             .credentials
             .iter()
-            .filter(|(_, _, p)| provider_filter.as_deref().is_none_or(|f| f == p))
-            .map(|(id, base_url, _)| serde_json::json!({"id": id, "base_url": base_url}))
+            .filter(|(_, _, p, _)| provider_filter.as_deref().is_none_or(|f| f == p))
+            .map(|(id, base_url, _, name)| serde_json::json!({"id": id, "base_url": base_url, "name": name}))
             .collect();
         Ok(Json(Value::Array(items)))
     }
@@ -1073,7 +1088,8 @@ mod tests {
         let id = format!("credential:{}", s.next_id);
         let base_url = body["base_url"].as_str().unwrap_or_default().to_string();
         let provider = body["provider"].as_str().unwrap_or_default().to_string();
-        s.credentials.push((id.clone(), base_url.clone(), provider));
+        let name = body["name"].as_str().unwrap_or_default().to_string();
+        s.credentials.push((id.clone(), base_url.clone(), provider, name));
         Ok((StatusCode::CREATED, Json(serde_json::json!({"id": id, "base_url": base_url}))))
     }
 
@@ -1136,7 +1152,7 @@ mod tests {
     ) -> Result<StatusCode, StatusCode> {
         check_auth(&state, &headers)?;
         let mut s = state.lock().unwrap();
-        s.credentials.retain(|(cid, _, _)| cid != &id);
+        s.credentials.retain(|(cid, _, _, _)| cid != &id);
         s.models.retain(|(_, _, _, cred)| cred != &id);
         Ok(StatusCode::OK)
     }
@@ -1230,7 +1246,7 @@ mod tests {
             let mut s = state.lock().unwrap();
             s.next_id += 1;
             let cred_id = format!("credential:{}", s.next_id);
-            s.credentials.push((cred_id.clone(), "http://127.0.0.1:9999/v1".to_string(), "openai_compatible".to_string()));
+            s.credentials.push((cred_id.clone(), "http://127.0.0.1:9999/v1".to_string(), "openai_compatible".to_string(), "hand-made".to_string()));
             s.next_id += 1;
             let model_id = format!("model:{}", s.next_id);
             s.models.push((model_id.clone(), "bge-m3".to_string(), "openai_compatible".to_string(), cred_id.clone()));
@@ -1246,12 +1262,12 @@ mod tests {
         assert_eq!(s.models.len(), 2, "our model is new, the old bge-m3 is untouched");
 
         // The old model/credential pair is exactly as it was.
-        assert!(s.credentials.iter().any(|(id, url, _)| id == &other_cred_id && url == "http://127.0.0.1:9999/v1"));
+        assert!(s.credentials.iter().any(|(id, url, _, _)| id == &other_cred_id && url == "http://127.0.0.1:9999/v1"));
         assert!(s.models.iter().any(|(id, name, _, cred)| id == &other_model_id && name == "bge-m3" && cred == &other_cred_id));
 
         // Our new model is bound to our credential, distinctly named (not
         // exactly "bge-m3", since that name is taken), and is now default.
-        let our_cred_id = s.credentials.iter().find(|(_, url, _)| url == embed_url).unwrap().0.clone();
+        let our_cred_id = s.credentials.iter().find(|(_, url, _, _)| url == embed_url).unwrap().0.clone();
         let our_model = s.models.iter().find(|(_, _, _, cred)| cred == &our_cred_id).unwrap();
         assert_ne!(our_model.0, other_model_id);
         assert_ne!(our_model.1, "bge-m3");
@@ -1278,20 +1294,33 @@ mod tests {
         assert!(!OpenNotebook::disconnect(&base_url, embed_url, None).unwrap());
 
         OpenNotebook::connect(&base_url, embed_url, None).unwrap();
-        // A second, unrelated credential must survive the disconnect.
-        {
+        // A hand-made credential on the SAME url (the 2026-09-29 incident:
+        // matching on url alone deleted it and its default model) plus a
+        // model of its own, which becomes the default.
+        let other_model = {
             let mut s = state.lock().unwrap();
             s.next_id += 1;
             let other_id = format!("credential:{}", s.next_id);
-            s.credentials.push((other_id.clone(), "http://127.0.0.1:9999/v1".to_string(), "openai_compatible".to_string()));
-        }
+            s.credentials.push((other_id.clone(), embed_url.to_string(), "openai_compatible".to_string(), "llama-server-local".to_string()));
+            s.next_id += 1;
+            let model_id = format!("model:{}", s.next_id);
+            s.models.push((model_id.clone(), "bge-m3".to_string(), "openai_compatible".to_string(), other_id));
+            model_id
+        };
 
+        // Refused while our model is the default: deleting it would leave
+        // the default dangling and break every embedding job.
+        assert!(OpenNotebook::disconnect(&base_url, embed_url, None).is_err());
+        assert_eq!(state.lock().unwrap().credentials.len(), 2, "refusal writes nothing");
+
+        state.lock().unwrap().default_embedding_model = Some(other_model.clone());
         assert!(OpenNotebook::disconnect(&base_url, embed_url, None).unwrap());
 
         let s = state.lock().unwrap();
-        assert_eq!(s.credentials.len(), 1, "only the unrelated credential remains");
-        assert_eq!(s.credentials[0].1, "http://127.0.0.1:9999/v1");
-        assert!(s.models.is_empty(), "our model was cascade-deleted with our credential");
+        assert_eq!(s.credentials.len(), 1, "only the hand-made credential remains");
+        assert_eq!(s.credentials[0].3, "llama-server-local");
+        assert_eq!(s.models.len(), 1, "only our model was cascade-deleted");
+        assert_eq!(s.models[0].0, other_model);
         drop(s);
 
         // Second disconnect is a no-op (our credential is already gone).

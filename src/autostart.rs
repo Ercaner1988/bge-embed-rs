@@ -77,9 +77,13 @@ mod imp {
     mod tests {
         use super::*;
 
-        /// Saves/restores whatever was there before, so running this test
-        /// never changes a real login-startup setting on the machine it runs on.
+        /// Writes the real HKCU Run key. Restoring only restores on/off: an
+        /// existing entry would come back pointing at the *test* binary
+        /// (current_exe), which then runs at every login - hence ignored by
+        /// default. Run with `cargo test -- --ignored` on a machine where
+        /// autostart is off.
         #[test]
+        #[ignore = "mutates the real HKCU Run key"]
         fn round_trip_enable_disable() {
             let was_enabled = is_enabled();
 

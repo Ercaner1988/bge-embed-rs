@@ -231,6 +231,10 @@ impl eframe::App for GuiApp {
 
                 header_row(ui, p, phase.as_ref());
                 ui.add_space(theme::GAP_LG);
+                // Tabs sit under the header (Penpot "v2 / *" boards), so they
+                // can never be pushed off-screen by tall content.
+                nav_bar(ui, p, &mut self.screen);
+                ui.add_space(theme::GAP_LG);
 
                 // "Detection runs on screen open" (DESIGN.md) - trigger once
                 // per transition into the Connections screen.
@@ -241,17 +245,14 @@ impl eframe::App for GuiApp {
                 }
                 self.prev_screen = self.screen;
 
-                match self.screen {
-                    Screen::Status => status_screen(ui, p, &self.status, phase.as_ref()),
-                    Screen::Connections => connections_screen(ui, p, &self.conn),
-                    Screen::Settings => {
-                        settings_screen(ui, p, &mut self.autostart_enabled, &mut self.model_input)
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    match self.screen {
+                        Screen::Status => status_screen(ui, p, &self.status, phase.as_ref()),
+                        Screen::Connections => connections_screen(ui, p, &self.conn),
+                        Screen::Settings => {
+                            settings_screen(ui, p, &mut self.autostart_enabled, &mut self.model_input)
+                        }
                     }
-                }
-
-                // Flexible spacer pushes the nav bar to the bottom.
-                ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
-                    nav_bar(ui, p, &mut self.screen);
                 });
             });
     }
@@ -399,14 +400,19 @@ fn endpoint_card_body(ui: &mut Ui, p: Palette, phase: Option<&Phase>) {
         format!("http://{}:{}/v1/embeddings", effective_host(), effective_port())
     });
 
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        if theme::primary_button(ui, p, "Copy", ready_url.is_some()).clicked() {
-            if let Some(url) = &ready_url {
-                ui.ctx().copy_text(url.clone());
+    // Wrapped in horizontal(): a bare right_to_left layout claims all the
+    // remaining height, which stretched this card and pushed the rest of
+    // the window off-screen.
+    ui.horizontal(|ui| {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if theme::primary_button(ui, p, "Copy", ready_url.is_some()).clicked() {
+                if let Some(url) = &ready_url {
+                    ui.ctx().copy_text(url.clone());
+                }
             }
-        }
-        ui.add_space(theme::GAP_SM);
-        theme::url_field(ui, p, &display_url);
+            ui.add_space(theme::GAP_SM);
+            theme::url_field(ui, p, &display_url);
+        });
     });
     ui.add_space(theme::GAP_XS);
 
@@ -493,19 +499,12 @@ fn tool_row(ui: &mut Ui, p: Palette, tool: Tool, conn: &Arc<ConnState>) -> bool 
             if theme::secondary_button(ui, p, "Disconnect", enabled).clicked() {
                 spawn_disconnect(tool, conn.clone(), false);
             }
-            ui.add_space(theme::GAP_SM);
-            if theme::secondary_button(ui, p, "Re-check", enabled).clicked() {
-                spawn_check(tool, conn.clone());
-            }
         } else if show_connect {
             if theme::primary_button(ui, p, "Connect", enabled).clicked() {
                 spawn_connect(tool, conn.clone(), false);
             }
-        } else {
-            if theme::secondary_button(ui, p, "Re-check", enabled).clicked() {
-                spawn_check(tool, conn.clone());
-            }
         }
+        // Re-checking lives in the card header ("Re-check all").
     });
 
     if status == Some(connectors::Status::NeedsKey) {
@@ -573,7 +572,17 @@ fn connections_screen(ui: &mut Ui, p: Palette, conn: &Arc<ConnState>) {
     ui.spacing_mut().item_spacing.y = theme::GAP_LG;
 
     theme::card(ui, p, |ui| {
-        ui.label(theme::rich("Detected on this computer", theme::SIZE_BODY, Weight::SemiBold, p.text));
+        ui.horizontal(|ui| {
+            ui.label(theme::rich("Detected on this computer", theme::SIZE_BODY, Weight::SemiBold, p.text));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let idle = conn.tools.iter().all(|t| !t.checking.load(Ordering::Relaxed));
+                if theme::secondary_button(ui, p, "Re-check all", idle).clicked() {
+                    for tool in Tool::ALL {
+                        spawn_check(tool, conn.clone());
+                    }
+                }
+            });
+        });
         ui.add_space(theme::GAP_MD);
         let mut shown_any = false;
         for tool in Tool::ALL {
@@ -616,7 +625,10 @@ fn connections_screen(ui: &mut Ui, p: Palette, conn: &Arc<ConnState>) {
     });
 
     ui.label(theme::rich(
-        "Tools running in Docker reach this server at host.docker.internal:11435. Enable network access in Settings on Linux.",
+        format!(
+            "Tools running in Docker reach this server at host.docker.internal:{}. Enable network access in Settings on Linux.",
+            effective_port()
+        ),
         theme::SIZE_CAPTION,
         Weight::Regular,
         p.text_muted,

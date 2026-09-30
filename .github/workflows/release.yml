@@ -64,8 +64,15 @@ jobs:
           "$BIN" --headless > server.log 2>&1 &
           trap 'echo "--- server.log"; cat server.log' EXIT
           for i in $(seq 1 120); do curl -sf http://127.0.0.1:11435/health && break; sleep 5; done
-          dim=$(curl -sf http://127.0.0.1:11435/v1/embeddings -H 'Content-Type: application/json' \
-            -d '{"model":"bge-m3","input":"Merhaba dünya / hello world"}' | "$PY" -c 'import sys,json; print(len(json.load(sys.stdin)["data"][0]["embedding"]))')
+          # Body from a file, not -d '...': on Windows, Git Bash hands curl's
+          # argv through the ANSI code page, so the "ü" arrived as invalid
+          # UTF-8 and the server rightly rejected it. printf writes raw bytes.
+          printf '%s' '{"model":"bge-m3","input":"Merhaba dünya / hello world"}' > body.json
+          code=$(curl -s -o resp.json -w '%{http_code}' http://127.0.0.1:11435/v1/embeddings \
+            -H 'Content-Type: application/json' --data-binary @body.json)
+          echo "HTTP $code"; head -c 300 resp.json; echo
+          test "$code" = "200"
+          dim=$("$PY" -c 'import json; print(len(json.load(open("resp.json"))["data"][0]["embedding"]))')
           test "$dim" = "1024"
 
       - uses: actions/upload-artifact@v4

@@ -138,42 +138,39 @@ pub struct Palette {
     pub error: Color32,
 }
 
-const fn hex(rgb: u32) -> Color32 {
-    Color32::from_rgb(((rgb >> 16) & 0xFF) as u8, ((rgb >> 8) & 0xFF) as u8, (rgb & 0xFF) as u8)
+/// Semantic roles mapped onto the shared Kilim palette (kilim-tema), so all
+/// four apps share one colour source.
+fn from_kilim(k: kilim_tema::Kilim, accent_on: Color32) -> Palette {
+    Palette {
+        bg_window: k.zem,
+        bg_surface: k.yuzey,
+        border: k.cizgi,
+        text: k.murekkep,
+        text_muted: k.soluk,
+        accent: k.cini,
+        accent_on,
+        success: k.yesil,
+        warning: k.sari,
+        error: k.kirmizi,
+    }
 }
 
-pub const LIGHT: Palette = Palette {
-    bg_window: hex(0xF7F8FA),
-    bg_surface: hex(0xFFFFFF),
-    border: hex(0xDCE0E6),
-    text: hex(0x171A1F),
-    text_muted: hex(0x5B6472),
-    accent: hex(0x1F6FD1),
-    accent_on: hex(0xFFFFFF),
-    success: hex(0x15803D),
-    warning: hex(0x92600E),
-    error: hex(0xB42318),
-};
+pub fn light() -> Palette {
+    let k = kilim_tema::acik();
+    from_kilim(k, k.yuzey)
+}
 
-pub const DARK: Palette = Palette {
-    bg_window: hex(0x171A1F),
-    bg_surface: hex(0x262B33),
-    border: hex(0x3F4652),
-    text: hex(0xF7F8FA),
-    text_muted: hex(0x9AA3AF),
-    accent: hex(0x5AA2F5),
-    accent_on: hex(0x0F1115),
-    success: hex(0x3CC47C),
-    warning: hex(0xE0A43A),
-    error: hex(0xF06A62),
-};
+pub fn dark() -> Palette {
+    let k = kilim_tema::koyu();
+    from_kilim(k, k.zem)
+}
 
 /// The palette matching egui's currently active theme (egui already tracks
 /// light/dark for us, following the OS - see [`apply`]).
 pub fn current(ctx: &egui::Context) -> Palette {
     match ctx.theme() {
-        egui::Theme::Dark => DARK,
-        egui::Theme::Light => LIGHT,
+        egui::Theme::Dark => dark(),
+        egui::Theme::Light => light(),
     }
 }
 
@@ -215,8 +212,8 @@ fn base_visuals(p: Palette, dark_mode: bool) -> egui::Visuals {
 /// switch between (see `Context::system_theme`).
 pub fn apply(ctx: &egui::Context) {
     install_fonts(ctx);
-    ctx.set_visuals_of(egui::Theme::Light, base_visuals(LIGHT, false));
-    ctx.set_visuals_of(egui::Theme::Dark, base_visuals(DARK, true));
+    ctx.set_visuals_of(egui::Theme::Light, base_visuals(light(), false));
+    ctx.set_visuals_of(egui::Theme::Dark, base_visuals(dark(), true));
     ctx.set_theme(egui::ThemePreference::System);
 }
 
@@ -451,23 +448,24 @@ mod tests {
     fn both_themes_define_every_token() {
         // Just accessing every field is the check: if a palette literal were
         // missing a field this wouldn't compile, so this test's job is to
-        // make sure LIGHT and DARK actually differ (no copy-paste palette).
-        assert_ne!(LIGHT.bg_window, DARK.bg_window);
-        assert_ne!(LIGHT.bg_surface, DARK.bg_surface);
-        assert_ne!(LIGHT.border, DARK.border);
-        assert_ne!(LIGHT.text, DARK.text);
-        assert_ne!(LIGHT.text_muted, DARK.text_muted);
-        assert_ne!(LIGHT.accent, DARK.accent);
-        assert_ne!(LIGHT.success, DARK.success);
-        assert_ne!(LIGHT.warning, DARK.warning);
-        assert_ne!(LIGHT.error, DARK.error);
+        // make sure light and dark actually differ (no copy-paste palette).
+        let (l, d) = (light(), dark());
+        assert_ne!(l.bg_window, d.bg_window);
+        assert_ne!(l.bg_surface, d.bg_surface);
+        assert_ne!(l.border, d.border);
+        assert_ne!(l.text, d.text);
+        assert_ne!(l.text_muted, d.text_muted);
+        assert_ne!(l.accent, d.accent);
+        assert_ne!(l.success, d.success);
+        assert_ne!(l.warning, d.warning);
+        assert_ne!(l.error, d.error);
     }
 
     #[test]
-    fn hex_matches_design_doc() {
-        assert_eq!(LIGHT.bg_window, Color32::from_rgb(0xF7, 0xF8, 0xFA));
-        assert_eq!(DARK.accent, Color32::from_rgb(0x5A, 0xA2, 0xF5));
-        assert_eq!(LIGHT.error, Color32::from_rgb(0xB4, 0x23, 0x18));
+    fn roles_map_onto_kilim_palette() {
+        assert_eq!(light().bg_window, Color32::from_rgb(0xF4, 0xEC, 0xDB)); // Kilim.zem
+        assert_eq!(dark().accent, Color32::from_rgb(0x7F, 0xB2, 0xD9)); // Kilim.cini (koyu)
+        assert_eq!(light().error, Color32::from_rgb(0xB2, 0x3A, 0x32)); // Kilim.kirmizi
     }
 
     #[test]

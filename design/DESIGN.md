@@ -1,6 +1,6 @@
 # bge-embed-rs UI design
 
-Source of truth: the Penpot file (4 boards: `Status / Downloading`, `Status / Ready`,
+Source of truth for layout, spacing, type: the Penpot file (4 boards: `Status / Downloading`, `Status / Ready`,
 `Connections`, `Settings`). Every value below is a design token; the egui theme must use
 exactly these values and nothing else.
 
@@ -8,18 +8,23 @@ exactly these values and nothing else.
 
 ### Colour (semantic, per theme)
 
+Since 2026-10-01 colours come from the shared Kilim palette in
+[kilim-tema](https://github.com/Ercaner1988/kilim-tema) (`theme::from_kilim`); the window is
+wrapped in its paper background + kilim border (`kilim_tema::cerceve`, cam göbeği variant).
+The Kilim field each token maps to is in brackets.
+
 | Token | Light | Dark | egui use |
 |---|---|---|---|
-| `color.bg.window` | `#F7F8FA` | `#171A1F` | `panel_fill`, `window_fill`, input field bg |
-| `color.bg.surface` | `#FFFFFF` | `#262B33` | cards, pills, secondary buttons, nav bar, `extreme_bg_color` |
-| `color.border.default` | `#DCE0E6` | `#3F4652` | 1 px inner stroke on cards/pills/inputs/secondary buttons, progress track |
-| `color.text.default` | `#171A1F` | `#F7F8FA` | primary text, `override_text_color` |
-| `color.text.muted` | `#5B6472` | `#9AA3AF` | captions, hints, inactive tabs, toggle-off track, neutral status dot |
-| `color.accent.default` | `#1F6FD1` | `#5AA2F5` | primary buttons, active tab, progress fill, toggle-on track, `selection.bg_fill`, `hyperlink_color` |
-| `color.accent.on` | `#FFFFFF` | `#0F1115` | text on accent |
-| `color.status.success` | `#15803D` | `#3CC47C` | Ready / Connected dot |
-| `color.status.warning` | `#92600E` | `#E0A43A` | Downloading / needs-attention dot |
-| `color.status.error` | `#B42318` | `#F06A62` | Failed dot + error text |
+| `color.bg.window` [zem] | `#F4ECDB` | `#241F19` | `panel_fill`, `window_fill`, input field bg |
+| `color.bg.surface` [yuzey] | `#FCF8EF` | `#2E2820` | cards, pills, secondary buttons, nav bar, `extreme_bg_color` |
+| `color.border.default` [cizgi] | `#D8CBB2` | `#4A4034` | 1 px inner stroke on cards/pills/inputs/secondary buttons, progress track |
+| `color.text.default` [murekkep] | `#3A2D21` | `#EDE4D3` | primary text, `override_text_color` |
+| `color.text.muted` [soluk] | `#7A6A55` | `#B3A48C` | captions, hints, inactive tabs, toggle-off track, neutral status dot |
+| `color.accent.default` [cini] | `#16537E` | `#7FB2D9` | primary buttons, active tab, progress fill, toggle-on track, `selection.bg_fill`, `hyperlink_color` |
+| `color.accent.on` [yuzey / koyu zem] | `#FCF8EF` | `#241F19` | text on accent |
+| `color.status.success` [yesil] | `#2E7D4F` | `#5FB98A` | Ready / Connected dot |
+| `color.status.warning` [sari] | `#A8730A` | `#D9A441` | Downloading / needs-attention dot |
+| `color.status.error` [kirmizi] | `#B23A32` | `#E06A5F` | Failed dot + error text |
 
 Theme follows the OS (`ctx.system_theme()` / eframe `follow_system_theme`).
 

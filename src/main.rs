@@ -610,7 +610,7 @@ fn main() -> Result<()> {
         native_options,
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx);
-            Ok(Box::new(gui::GuiApp::new(status)))
+            Ok(Box::new(gui::GuiApp::new(status, &cc.egui_ctx)))
         }),
     )
     .map_err(|e| anyhow!("gui error: {e}"))

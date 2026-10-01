@@ -198,10 +198,18 @@ pub struct GuiApp {
     /// startup; edits are saved via `save_model_setting` and take effect on
     /// next launch (the running server keeps whatever model it already loaded).
     model_input: String,
+    /// Shared kilim-tema look (paper/border, light/dark), saved per app.
+    tercih: kilim_tema::TemaTercihi,
 }
 
+/// File name for this app's saved theme choice (kilim-tema keeps one per app).
+const TEMA_ADI: &str = "bge-embed-rs";
+
 impl GuiApp {
-    pub fn new(status: Arc<Status>) -> Self {
+    pub fn new(status: Arc<Status>, ctx: &egui::Context) -> Self {
+        let varsayilan = kilim_tema::TemaTercihi::varsayilan(kilim_tema::Varyant::CamGobegiAltin);
+        let tercih = kilim_tema::TemaTercihi::yukle(TEMA_ADI, varsayilan);
+        tercih.uygula(ctx);
         Self {
             status,
             screen: Screen::Status,
@@ -209,6 +217,7 @@ impl GuiApp {
             conn: Arc::new(ConnState::default()),
             autostart_enabled: autostart::is_enabled(),
             model_input: effective_model(),
+            tercih,
         }
     }
 }
@@ -223,43 +232,48 @@ impl eframe::App for GuiApp {
         // so keep repainting on a timer rather than only on user input.
         ctx.request_repaint_after(Duration::from_millis(250));
         let p = theme::current(&ctx);
+        let tercih = self.tercih;
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(p.bg_window).inner_margin(theme::INSET_LG as i8))
-            .show(ui, |ui| {
-                let phase = self.status.phase.lock().unwrap().clone();
+        // Paper + kilim border around everything (or flat bg in "Sade"); the
+        // panel is transparent so the paper shows through.
+        kilim_tema::cerceve(ui, &tercih, |ui| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().fill(egui::Color32::TRANSPARENT).inner_margin(theme::INSET_LG as i8))
+                .show(ui, |ui| {
+                    let phase = self.status.phase.lock().unwrap().clone();
 
-                header_row(ui, p, phase.as_ref());
-                ui.add_space(theme::GAP_LG);
-                // Tabs sit under the header (Penpot "v2 / *" boards), so they
-                // can never be pushed off-screen by tall content.
-                nav_bar(ui, p, &mut self.screen);
-                ui.add_space(theme::GAP_LG);
+                    header_row(ui, p, phase.as_ref(), &mut self.tercih);
+                    ui.add_space(theme::GAP_LG);
+                    // Tabs sit under the header (Penpot "v2 / *" boards), so they
+                    // can never be pushed off-screen by tall content.
+                    nav_bar(ui, p, &mut self.screen);
+                    ui.add_space(theme::GAP_LG);
 
-                // "Detection runs on screen open" (DESIGN.md) - trigger once
-                // per transition into the Connections screen.
-                if self.screen == Screen::Connections && self.prev_screen != Screen::Connections {
-                    for tool in Tool::ALL {
-                        spawn_check(tool, self.conn.clone());
-                    }
-                }
-                self.prev_screen = self.screen;
-
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    match self.screen {
-                        Screen::Status => status_screen(ui, p, &self.status, phase.as_ref()),
-                        Screen::Connections => connections_screen(ui, p, &self.conn),
-                        Screen::Settings => {
-                            settings_screen(ui, p, &mut self.autostart_enabled, &mut self.model_input)
+                    // "Detection runs on screen open" (DESIGN.md) - trigger once
+                    // per transition into the Connections screen.
+                    if self.screen == Screen::Connections && self.prev_screen != Screen::Connections {
+                        for tool in Tool::ALL {
+                            spawn_check(tool, self.conn.clone());
                         }
                     }
+                    self.prev_screen = self.screen;
+
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        match self.screen {
+                            Screen::Status => status_screen(ui, p, &self.status, phase.as_ref()),
+                            Screen::Connections => connections_screen(ui, p, &self.conn),
+                            Screen::Settings => {
+                                settings_screen(ui, p, &mut self.autostart_enabled, &mut self.model_input)
+                            }
+                        }
+                    });
                 });
-            });
+        });
     }
 }
 
 /// Header row: title/subtitle on the left, status pill on the right.
-fn header_row(ui: &mut Ui, p: Palette, phase: Option<&Phase>) {
+fn header_row(ui: &mut Ui, p: Palette, phase: Option<&Phase>, tercih: &mut kilim_tema::TemaTercihi) {
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = theme::GAP_XS;
@@ -272,6 +286,10 @@ fn header_row(ui: &mut Ui, p: Palette, phase: Option<&Phase>) {
             ));
         });
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if kilim_tema::tema_secici(ui, tercih) {
+                tercih.kaydet(TEMA_ADI);
+            }
+            ui.add_space(theme::GAP_SM);
             let (color, label) = phase_pill(phase, &p);
             theme::status_pill(ui, p, color, label);
         });
@@ -738,22 +756,22 @@ mod tests {
 
     #[test]
     fn phase_pill_maps_every_phase() {
-        assert_eq!(phase_pill(None, &theme::LIGHT).0, theme::LIGHT.warning);
+        assert_eq!(phase_pill(None, &theme::light()).0, theme::light().warning);
         assert_eq!(
             phase_pill(
                 Some(&Phase::Downloading { file: "f".into(), done_bytes: 0, total_bytes: None }),
-                &theme::LIGHT
+                &theme::light()
             ),
-            (theme::LIGHT.warning, "Downloading")
+            (theme::light().warning, "Downloading")
         );
-        assert_eq!(phase_pill(Some(&Phase::Loading), &theme::LIGHT), (theme::LIGHT.warning, "Loading"));
+        assert_eq!(phase_pill(Some(&Phase::Loading), &theme::light()), (theme::light().warning, "Loading"));
         assert_eq!(
-            phase_pill(Some(&Phase::Ready { url: "u".into() }), &theme::LIGHT),
-            (theme::LIGHT.success, "Ready")
+            phase_pill(Some(&Phase::Ready { url: "u".into() }), &theme::light()),
+            (theme::light().success, "Ready")
         );
         assert_eq!(
-            phase_pill(Some(&Phase::Failed("e".into())), &theme::LIGHT),
-            (theme::LIGHT.error, "Failed")
+            phase_pill(Some(&Phase::Failed("e".into())), &theme::light()),
+            (theme::light().error, "Failed")
         );
     }
 }

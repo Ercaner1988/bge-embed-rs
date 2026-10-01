@@ -486,6 +486,7 @@ dependencies = [
  "candle-transformers",
  "eframe",
  "hf-hub",
+ "kilim-tema",
  "serde",
  "serde_json",
  "tokenizers",
@@ -2291,6 +2292,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -2441,6 +2444,15 @@ name = "khronos_api"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
+
+[[package]]
+name = "kilim-tema"
+version = "0.1.0"
+source = "git+https://github.com/Ercaner1988/kilim-tema?rev=624f1a376759e89c0a60184a3613fa12e451ef30#624f1a376759e89c0a60184a3613fa12e451ef30"
+dependencies = [
+ "egui",
+ "image",
+]
 
 [[package]]
 name = "kurbo"

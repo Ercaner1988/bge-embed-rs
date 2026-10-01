@@ -9,7 +9,7 @@ repository = "https://github.com/Ercaner1988/bge-embed-rs"
 [dependencies]
 # Ortak tema (Kilim paleti, Semerkant kâğıdı, kilim çerçeve). git + rev: kardeş
 # depo yolu klonlayan herkeste ve CI'da yok. Tema değişince rev'i güncelle.
-kilim-tema = { git = "https://github.com/Ercaner1988/kilim-tema", rev = "9d110ec180e37b5bc567b8c5d699e78f1c6fc174" }
+kilim-tema = { git = "https://github.com/Ercaner1988/kilim-tema", rev = "ddd1484c7855319877a3442e1bfceeacc5afe64d" }
 candle-core = "0.9"
 candle-nn = "0.9"
 candle-transformers = "0.9"

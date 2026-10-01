@@ -4,8 +4,8 @@
 
 use crate::autostart;
 use crate::connectors::{self, Tool};
-use crate::{effective_host, effective_model, effective_parallel, effective_port, Phase, Status};
 use crate::theme::{self, Palette, Weight};
+use crate::{Phase, Status, effective_host, effective_model, effective_parallel, effective_port};
 use eframe::egui::{self, Align, Color32, Layout, Ui};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -77,7 +77,10 @@ struct ConnState {
 
 impl Default for ConnState {
     fn default() -> Self {
-        Self { tools: Default::default(), docker: AtomicBool::new(false) }
+        Self {
+            tools: Default::default(),
+            docker: AtomicBool::new(false),
+        }
     }
 }
 
@@ -94,15 +97,24 @@ fn spawn_check(tool: Tool, conn: Arc<ConnState>) {
     }
     std::thread::spawn(move || {
         let state = &conn.tools[tool_index(tool)];
-        let embed_url = connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
-        let base_url = tool.candidate_base_urls().iter().find(|u| tool.detect(u)).copied();
+        let embed_url =
+            connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
+        let base_url = tool
+            .candidate_base_urls()
+            .iter()
+            .find(|u| tool.detect(u))
+            .copied();
         *state.base_url.lock().unwrap() = base_url;
         *state.last_error.lock().unwrap() = None;
         *state.pending_confirm.lock().unwrap() = None;
         let status = match base_url {
             Some(base_url) => {
                 let pw = state.password.lock().unwrap().clone();
-                let pw = if pw.is_empty() { None } else { Some(pw.as_str()) };
+                let pw = if pw.is_empty() {
+                    None
+                } else {
+                    Some(pw.as_str())
+                };
                 tool.status(base_url, &embed_url, pw)
             }
             None => connectors::Status::NotFound,
@@ -127,9 +139,14 @@ fn spawn_connect(tool: Tool, conn: Arc<ConnState>, confirm_reset: bool) {
             state.checking.store(false, Ordering::SeqCst);
             return;
         };
-        let embed_url = connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
+        let embed_url =
+            connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
         let pw = state.password.lock().unwrap().clone();
-        let pw_opt = if pw.is_empty() { None } else { Some(pw.as_str()) };
+        let pw_opt = if pw.is_empty() {
+            None
+        } else {
+            Some(pw.as_str())
+        };
         *state.last_error.lock().unwrap() = None;
         *state.pending_confirm.lock().unwrap() = None;
         match tool.connect(base_url, &embed_url, pw_opt, confirm_reset) {
@@ -163,9 +180,14 @@ fn spawn_disconnect(tool: Tool, conn: Arc<ConnState>, confirm_reset: bool) {
             state.checking.store(false, Ordering::SeqCst);
             return;
         };
-        let embed_url = connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
+        let embed_url =
+            connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
         let pw = state.password.lock().unwrap().clone();
-        let pw_opt = if pw.is_empty() { None } else { Some(pw.as_str()) };
+        let pw_opt = if pw.is_empty() {
+            None
+        } else {
+            Some(pw.as_str())
+        };
         *state.last_error.lock().unwrap() = None;
         *state.pending_confirm.lock().unwrap() = None;
         match tool.disconnect(base_url, &embed_url, pw_opt, confirm_reset) {
@@ -210,6 +232,7 @@ impl GuiApp {
         let varsayilan = kilim_tema::TemaTercihi::varsayilan(kilim_tema::Varyant::CamGobegiAltin);
         let tercih = kilim_tema::TemaTercihi::yukle(TEMA_ADI, varsayilan);
         tercih.uygula(ctx);
+        theme::apply_visuals(ctx);
         Self {
             status,
             screen: Screen::Status,
@@ -238,7 +261,11 @@ impl eframe::App for GuiApp {
         // panel is transparent so the paper shows through.
         kilim_tema::cerceve(ui, &tercih, |ui| {
             egui::CentralPanel::default()
-                .frame(egui::Frame::new().fill(egui::Color32::TRANSPARENT).inner_margin(theme::INSET_LG as i8))
+                .frame(
+                    egui::Frame::new()
+                        .fill(egui::Color32::TRANSPARENT)
+                        .inner_margin(theme::INSET_LG as i8),
+                )
                 .show(ui, |ui| {
                     let phase = self.status.phase.lock().unwrap().clone();
 
@@ -251,33 +278,47 @@ impl eframe::App for GuiApp {
 
                     // "Detection runs on screen open" (DESIGN.md) - trigger once
                     // per transition into the Connections screen.
-                    if self.screen == Screen::Connections && self.prev_screen != Screen::Connections {
+                    if self.screen == Screen::Connections && self.prev_screen != Screen::Connections
+                    {
                         for tool in Tool::ALL {
                             spawn_check(tool, self.conn.clone());
                         }
                     }
                     self.prev_screen = self.screen;
 
-                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                        match self.screen {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| match self.screen {
                             Screen::Status => status_screen(ui, p, &self.status, phase.as_ref()),
                             Screen::Connections => connections_screen(ui, p, &self.conn),
-                            Screen::Settings => {
-                                settings_screen(ui, p, &mut self.autostart_enabled, &mut self.model_input)
-                            }
-                        }
-                    });
+                            Screen::Settings => settings_screen(
+                                ui,
+                                p,
+                                &mut self.autostart_enabled,
+                                &mut self.model_input,
+                            ),
+                        });
                 });
         });
     }
 }
 
 /// Header row: title/subtitle on the left, status pill on the right.
-fn header_row(ui: &mut Ui, p: Palette, phase: Option<&Phase>, tercih: &mut kilim_tema::TemaTercihi) {
+fn header_row(
+    ui: &mut Ui,
+    p: Palette,
+    phase: Option<&Phase>,
+    tercih: &mut kilim_tema::TemaTercihi,
+) {
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = theme::GAP_XS;
-            ui.label(theme::rich("bge-embed-rs", theme::SIZE_TITLE, Weight::SemiBold, p.text));
+            ui.label(theme::rich(
+                "bge-embed-rs",
+                theme::SIZE_TITLE,
+                Weight::SemiBold,
+                p.text,
+            ));
             ui.label(theme::rich(
                 "Local bge-m3 embedding server",
                 theme::SIZE_CAPTION,
@@ -288,6 +329,7 @@ fn header_row(ui: &mut Ui, p: Palette, phase: Option<&Phase>, tercih: &mut kilim
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if kilim_tema::tema_secici(ui, tercih) {
                 tercih.kaydet(TEMA_ADI);
+                theme::apply_visuals(ui.ctx());
             }
             ui.add_space(theme::GAP_SM);
             let (color, label) = phase_pill(phase, &p);
@@ -388,7 +430,11 @@ fn model_card_body(ui: &mut Ui, p: Palette, phase: Option<&Phase>) {
     ui.add_space(theme::GAP_XS);
 
     let (detail, color) = match phase {
-        Some(Phase::Downloading { file, done_bytes, total_bytes }) => {
+        Some(Phase::Downloading {
+            file,
+            done_bytes,
+            total_bytes,
+        }) => {
             let done_gb = *done_bytes as f64 / 1_000_000_000.0;
             let detail = match total_bytes {
                 Some(total) => format!(
@@ -399,15 +445,31 @@ fn model_card_body(ui: &mut Ui, p: Palette, phase: Option<&Phase>) {
             };
             (detail, p.text_muted)
         }
-        Some(Phase::Loading) | None => ("Loading model into memory\u{2026}".to_string(), p.text_muted),
-        Some(Phase::Ready { .. }) => ("In memory \u{b7} 1024-dim vectors \u{b7} CPU (AVX2)".to_string(), p.text_muted),
+        Some(Phase::Loading) | None => (
+            "Loading model into memory\u{2026}".to_string(),
+            p.text_muted,
+        ),
+        Some(Phase::Ready { .. }) => (
+            "In memory \u{b7} 1024-dim vectors \u{b7} CPU (AVX2)".to_string(),
+            p.text_muted,
+        ),
         Some(Phase::Failed(msg)) => (msg.clone(), p.error),
     };
-    ui.label(theme::rich(detail, theme::SIZE_CAPTION, Weight::Regular, color));
+    ui.label(theme::rich(
+        detail,
+        theme::SIZE_CAPTION,
+        Weight::Regular,
+        color,
+    ));
 }
 
 fn endpoint_card_body(ui: &mut Ui, p: Palette, phase: Option<&Phase>) {
-    ui.label(theme::rich("Endpoint", theme::SIZE_BODY, Weight::SemiBold, p.text));
+    ui.label(theme::rich(
+        "Endpoint",
+        theme::SIZE_BODY,
+        Weight::SemiBold,
+        p.text,
+    ));
     ui.add_space(theme::GAP_SM);
 
     let ready_url = match phase {
@@ -415,7 +477,11 @@ fn endpoint_card_body(ui: &mut Ui, p: Palette, phase: Option<&Phase>) {
         _ => None,
     };
     let display_url = ready_url.clone().unwrap_or_else(|| {
-        format!("http://{}:{}/v1/embeddings", effective_host(), effective_port())
+        format!(
+            "http://{}:{}/v1/embeddings",
+            effective_host(),
+            effective_port()
+        )
     });
 
     // Wrapped in horizontal(): a bare right_to_left layout claims all the
@@ -439,7 +505,12 @@ fn endpoint_card_body(ui: &mut Ui, p: Palette, phase: Option<&Phase>) {
     } else {
         "Available once the model is loaded. OpenAI-compatible, model name: bge-m3"
     };
-    ui.label(theme::rich(hint, theme::SIZE_CAPTION, Weight::Regular, p.text_muted));
+    ui.label(theme::rich(
+        hint,
+        theme::SIZE_CAPTION,
+        Weight::Regular,
+        p.text_muted,
+    ));
 }
 
 fn stats_row(ui: &mut Ui, p: Palette, status: &Status) {
@@ -450,8 +521,14 @@ fn stats_row(ui: &mut Ui, p: Palette, status: &Status) {
         format!("{last_latency} ms")
     };
     let stats = [
-        ("Requests", status.requests_served.load(Ordering::Relaxed).to_string()),
-        ("Texts embedded", status.texts_embedded.load(Ordering::Relaxed).to_string()),
+        (
+            "Requests",
+            status.requests_served.load(Ordering::Relaxed).to_string(),
+        ),
+        (
+            "Texts embedded",
+            status.texts_embedded.load(Ordering::Relaxed).to_string(),
+        ),
         ("Last latency", last_latency),
     ];
     ui.spacing_mut().item_spacing.x = theme::GAP_MD;
@@ -459,8 +536,18 @@ fn stats_row(ui: &mut Ui, p: Palette, status: &Status) {
         for (col, (label, value)) in cols.iter_mut().zip(stats) {
             theme::card(col, p, |ui| {
                 ui.spacing_mut().item_spacing.y = theme::GAP_XS;
-                ui.label(theme::rich(label, theme::SIZE_CAPTION, Weight::Regular, p.text_muted));
-                ui.label(theme::rich(value, theme::SIZE_SUBTITLE, Weight::SemiBold, p.text));
+                ui.label(theme::rich(
+                    label,
+                    theme::SIZE_CAPTION,
+                    Weight::Regular,
+                    p.text_muted,
+                ));
+                ui.label(theme::rich(
+                    value,
+                    theme::SIZE_SUBTITLE,
+                    Weight::SemiBold,
+                    p.text,
+                ));
             });
         }
     });
@@ -472,13 +559,26 @@ fn stats_row(ui: &mut Ui, p: Palette, status: &Status) {
 
 /// One row of the "Detected on this computer" / "Other tools" cards: avatar,
 /// name + status-dot meta line, and a caller-supplied button (DESIGN.md).
-fn connector_row(ui: &mut Ui, p: Palette, initials: &str, name: &str, dot: Color32, meta: &str, button: impl FnOnce(&mut Ui)) {
+fn connector_row(
+    ui: &mut Ui,
+    p: Palette,
+    initials: &str,
+    name: &str,
+    dot: Color32,
+    meta: &str,
+    button: impl FnOnce(&mut Ui),
+) {
     ui.horizontal(|ui| {
         theme::avatar(ui, p, initials);
         ui.add_space(theme::GAP_SM);
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = theme::GAP_XS;
-            ui.label(theme::rich(name, theme::SIZE_BODY, Weight::SemiBold, p.text));
+            ui.label(theme::rich(
+                name,
+                theme::SIZE_BODY,
+                Weight::SemiBold,
+                p.text,
+            ));
             theme::status_dot_row(ui, p, dot, meta);
         });
         ui.with_layout(Layout::right_to_left(Align::Center), button);
@@ -487,7 +587,8 @@ fn connector_row(ui: &mut Ui, p: Palette, initials: &str, name: &str, dot: Color
 
 /// `"http://host:port"` -> `"host:port"`, for the row's meta line.
 fn host_only(url: &str) -> &str {
-    url.trim_start_matches("http://").trim_start_matches("https://")
+    url.trim_start_matches("http://")
+        .trim_start_matches("https://")
 }
 
 /// One tool's row in the "Detected on this computer" card. Returns `false`
@@ -498,11 +599,23 @@ fn tool_row(ui: &mut Ui, p: Palette, tool: Tool, conn: &Arc<ConnState>) -> bool 
     if status == Some(connectors::Status::NotFound) {
         return false;
     }
-    let host = host_only(state.base_url.lock().unwrap().unwrap_or_else(|| tool.candidate_base_urls()[0]));
+    let host = host_only(
+        state
+            .base_url
+            .lock()
+            .unwrap()
+            .unwrap_or_else(|| tool.candidate_base_urls()[0]),
+    );
     let (dot, meta, show_connect) = match status {
         None => (p.text_muted, "Checking\u{2026}".to_string(), false),
-        Some(connectors::Status::Connected) => (p.success, format!("Connected \u{b7} {host}"), false),
-        Some(connectors::Status::NeedsKey) => (p.warning, format!("{} \u{b7} {host}", tool.needs_key_meta()), true),
+        Some(connectors::Status::Connected) => {
+            (p.success, format!("Connected \u{b7} {host}"), false)
+        }
+        Some(connectors::Status::NeedsKey) => (
+            p.warning,
+            format!("{} \u{b7} {host}", tool.needs_key_meta()),
+            true,
+        ),
         Some(connectors::Status::Found) => (p.text_muted, format!("Found \u{b7} {host}"), true),
         Some(connectors::Status::NotFound) => unreachable!("returned above"),
     };
@@ -528,7 +641,7 @@ fn tool_row(ui: &mut Ui, p: Palette, tool: Tool, conn: &Arc<ConnState>) -> bool 
     if status == Some(connectors::Status::NeedsKey) {
         ui.add_space(theme::GAP_XS);
         let mut pw = state.password.lock().unwrap().clone();
-        if ui.add(egui::TextEdit::singleline(&mut pw).password(true).hint_text(tool.key_label())).changed() {
+        if theme::secret_input(ui, p, &mut pw, tool.key_label()).changed() {
             *state.password.lock().unwrap() = pw;
         }
     }
@@ -549,14 +662,23 @@ fn tool_row(ui: &mut Ui, p: Palette, tool: Tool, conn: &Arc<ConnState>) -> bool 
             ),
         };
         ui.add_space(theme::GAP_XS);
-        ui.label(theme::rich(warning, theme::SIZE_CAPTION, Weight::Regular, p.error));
+        ui.label(theme::rich(
+            warning,
+            theme::SIZE_CAPTION,
+            Weight::Regular,
+            p.error,
+        ));
         ui.add_space(theme::GAP_XS);
         ui.horizontal(|ui| {
-            if theme::secondary_button(ui, p, "Cancel", !state.checking.load(Ordering::Relaxed)).clicked() {
+            if theme::secondary_button(ui, p, "Cancel", !state.checking.load(Ordering::Relaxed))
+                .clicked()
+            {
                 *state.pending_confirm.lock().unwrap() = None;
             }
             ui.add_space(theme::GAP_SM);
-            if theme::danger_button(ui, p, action_label, !state.checking.load(Ordering::Relaxed)).clicked() {
+            if theme::danger_button(ui, p, action_label, !state.checking.load(Ordering::Relaxed))
+                .clicked()
+            {
                 match action {
                     PendingConfirm::Connect => spawn_connect(tool, conn.clone(), true),
                     PendingConfirm::Disconnect => spawn_disconnect(tool, conn.clone(), true),
@@ -570,7 +692,12 @@ fn tool_row(ui: &mut Ui, p: Palette, tool: Tool, conn: &Arc<ConnState>) -> bool 
     // the row.
     if let Some(err) = state.last_error.lock().unwrap().clone() {
         ui.add_space(theme::GAP_XS);
-        ui.label(theme::rich(err, theme::SIZE_CAPTION, Weight::Regular, p.error));
+        ui.label(theme::rich(
+            err,
+            theme::SIZE_CAPTION,
+            Weight::Regular,
+            p.error,
+        ));
     }
 
     // Only shown when a connect()/disconnect() in this session actually
@@ -580,7 +707,12 @@ fn tool_row(ui: &mut Ui, p: Palette, tool: Tool, conn: &Arc<ConnState>) -> bool 
     // as relevant then.
     if state.changed.load(Ordering::Relaxed) {
         ui.add_space(theme::GAP_XS);
-        ui.label(theme::rich(tool.changed_caption(), theme::SIZE_CAPTION, Weight::Regular, p.text_muted));
+        ui.label(theme::rich(
+            tool.changed_caption(),
+            theme::SIZE_CAPTION,
+            Weight::Regular,
+            p.text_muted,
+        ));
     }
 
     true
@@ -591,9 +723,17 @@ fn connections_screen(ui: &mut Ui, p: Palette, conn: &Arc<ConnState>) {
 
     theme::card(ui, p, |ui| {
         ui.horizontal(|ui| {
-            ui.label(theme::rich("Detected on this computer", theme::SIZE_BODY, Weight::SemiBold, p.text));
+            ui.label(theme::rich(
+                "Detected on this computer",
+                theme::SIZE_BODY,
+                Weight::SemiBold,
+                p.text,
+            ));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let idle = conn.tools.iter().all(|t| !t.checking.load(Ordering::Relaxed));
+                let idle = conn
+                    .tools
+                    .iter()
+                    .all(|t| !t.checking.load(Ordering::Relaxed));
                 if theme::secondary_button(ui, p, "Re-check all", idle).clicked() {
                     for tool in Tool::ALL {
                         spawn_check(tool, conn.clone());
@@ -627,18 +767,32 @@ fn connections_screen(ui: &mut Ui, p: Palette, conn: &Arc<ConnState>) {
     });
 
     theme::card(ui, p, |ui| {
-        ui.label(theme::rich("Other tools (manual setup)", theme::SIZE_BODY, Weight::SemiBold, p.text));
+        ui.label(theme::rich(
+            "Other tools (manual setup)",
+            theme::SIZE_BODY,
+            Weight::SemiBold,
+            p.text,
+        ));
         ui.add_space(theme::GAP_MD);
-        let embed_url = connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
+        let embed_url =
+            connectors::embedding_url(&effective_port(), conn.docker.load(Ordering::Relaxed));
         for (i, tool) in connectors::MANUAL_TOOLS.iter().enumerate() {
             if i > 0 {
                 ui.add_space(theme::GAP_MD);
             }
-            connector_row(ui, p, tool.initials, tool.name, p.text_muted, "Manual setup", |ui| {
-                if theme::secondary_button(ui, p, "Copy config", true).clicked() {
-                    ui.ctx().copy_text((tool.config)(&embed_url));
-                }
-            });
+            connector_row(
+                ui,
+                p,
+                tool.initials,
+                tool.name,
+                p.text_muted,
+                "Manual setup",
+                |ui| {
+                    if theme::secondary_button(ui, p, "Copy config", true).clicked() {
+                        ui.ctx().copy_text((tool.config)(&embed_url));
+                    }
+                },
+            );
         }
     });
 
@@ -660,19 +814,36 @@ fn connections_screen(ui: &mut Ui, p: Palette, conn: &Arc<ConnState>) {
 /// A Settings row: label/hint on the left, a fixed-width control on the
 /// right (gap 12, per DESIGN.md). `control_width` reserves room for the
 /// control so the hint wraps instead of running under it.
-fn setting_row(ui: &mut Ui, p: Palette, label: &str, hint: &str, control_width: f32, control: impl FnOnce(&mut Ui)) {
+fn setting_row(
+    ui: &mut Ui,
+    p: Palette,
+    label: &str,
+    hint: &str,
+    control_width: f32,
+    control: impl FnOnce(&mut Ui),
+) {
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.set_width(ui.available_width() - control_width - theme::GAP_MD);
             ui.spacing_mut().item_spacing.y = theme::GAP_XS;
             ui.label(theme::rich(label, theme::SIZE_BODY, Weight::Medium, p.text));
-            ui.label(theme::rich(hint, theme::SIZE_CAPTION, Weight::Regular, p.text_muted));
+            ui.label(theme::rich(
+                hint,
+                theme::SIZE_CAPTION,
+                Weight::Regular,
+                p.text_muted,
+            ));
         });
         ui.with_layout(Layout::right_to_left(Align::Center), control);
     });
 }
 
-fn settings_screen(ui: &mut Ui, p: Palette, autostart_enabled: &mut bool, model_input: &mut String) {
+fn settings_screen(
+    ui: &mut Ui,
+    p: Palette,
+    autostart_enabled: &mut bool,
+    model_input: &mut String,
+) {
     ui.spacing_mut().item_spacing.y = theme::GAP_LG;
 
     theme::card(ui, p, |ui| {
@@ -759,12 +930,19 @@ mod tests {
         assert_eq!(phase_pill(None, &theme::light()).0, theme::light().warning);
         assert_eq!(
             phase_pill(
-                Some(&Phase::Downloading { file: "f".into(), done_bytes: 0, total_bytes: None }),
+                Some(&Phase::Downloading {
+                    file: "f".into(),
+                    done_bytes: 0,
+                    total_bytes: None
+                }),
                 &theme::light()
             ),
             (theme::light().warning, "Downloading")
         );
-        assert_eq!(phase_pill(Some(&Phase::Loading), &theme::light()), (theme::light().warning, "Loading"));
+        assert_eq!(
+            phase_pill(Some(&Phase::Loading), &theme::light()),
+            (theme::light().warning, "Loading")
+        );
         assert_eq!(
             phase_pill(Some(&Phase::Ready { url: "u".into() }), &theme::light()),
             (theme::light().success, "Ready")

@@ -10,6 +10,7 @@ use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Response,
     RichText, Sense, Stroke, StrokeKind, Ui, Vec2,
 };
+use kilim_tema::Boncuk;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -240,8 +241,8 @@ pub fn card<R>(ui: &mut Ui, p: Palette, add_contents: impl FnOnce(&mut Ui) -> R)
         .inner
 }
 
-fn button(ui: &mut Ui, enabled: bool, text: RichText, fill: Color32, stroke: Stroke) -> Response {
-    let btn = egui::Button::new(text)
+fn button(ui: &mut Ui, enabled: bool, bead: Boncuk, text: RichText, fill: Color32, stroke: Stroke) -> Response {
+    let btn = kilim_tema::boncuklu(ui, bead, text)
         .fill(fill)
         .stroke(stroke)
         .corner_radius(CornerRadius::same(RADIUS_CONTROL));
@@ -257,6 +258,7 @@ pub fn primary_button(ui: &mut Ui, p: Palette, label: &str, enabled: bool) -> Re
     button(
         ui,
         enabled,
+        Boncuk::Firuze,
         rich(label, SIZE_CAPTION, Weight::SemiBold, p.accent_on),
         p.accent,
         Stroke::NONE,
@@ -268,6 +270,7 @@ pub fn secondary_button(ui: &mut Ui, p: Palette, label: &str, enabled: bool) -> 
     button(
         ui,
         enabled,
+        Boncuk::Kehribar,
         rich(label, SIZE_CAPTION, Weight::Medium, p.text),
         p.bg_surface,
         Stroke::new(BORDER_WIDTH, p.border),
@@ -280,7 +283,7 @@ pub fn secondary_button(ui: &mut Ui, p: Palette, label: &str, enabled: bool) -> 
 /// token: reuses `p.error` (already used for the Failed dot/text) and
 /// `p.accent_on` (already used for text-on-fill).
 pub fn danger_button(ui: &mut Ui, p: Palette, label: &str, enabled: bool) -> Response {
-    button(ui, enabled, rich(label, SIZE_CAPTION, Weight::SemiBold, p.accent_on), p.error, Stroke::NONE)
+    button(ui, enabled, Boncuk::Akik, rich(label, SIZE_CAPTION, Weight::SemiBold, p.accent_on), p.error, Stroke::NONE)
 }
 
 /// Status pill: surface bg, 1 px border, full radius, padding 8x4, 8 px dot +
@@ -310,7 +313,11 @@ pub fn nav_tab(ui: &mut Ui, p: Palette, label: &str, active: bool, width: f32) -
         if active { Weight::SemiBold } else { Weight::Medium },
         if active { p.accent_on } else { p.text_muted },
     );
-    let btn = egui::Button::new(text)
+    // Active tab's bead is lit, inactive ones are dimmed - the bead marks the selection.
+    let cap = SIZE_CAPTION + 4.0;
+    let bead = kilim_tema::boncuk_resmi(ui.ctx(), Boncuk::Firuze, cap)
+        .tint(if active { Color32::WHITE } else { Color32::from_gray(150).gamma_multiply(0.6) });
+    let btn = egui::Button::image_and_text(bead, text)
         .fill(if active { p.accent } else { Color32::TRANSPARENT })
         .stroke(Stroke::NONE)
         .corner_radius(CornerRadius::same(RADIUS_CONTROL));
@@ -328,7 +335,7 @@ pub fn nav_tab(ui: &mut Ui, p: Palette, label: &str, active: bool, width: f32) -
 pub fn toggle_static(ui: &mut Ui, p: Palette, on: bool) -> Response {
     let size = Vec2::new(TOGGLE_WIDTH, TOGGLE_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
-    paint_toggle(ui, p, rect, on);
+    paint_toggle(ui, p, rect, if on { 1.0 } else { 0.0 });
     response
 }
 
@@ -342,21 +349,16 @@ pub fn toggle(ui: &mut Ui, p: Palette, on: &mut bool) -> Response {
         *on = !*on;
         response.mark_changed();
     }
-    paint_toggle(ui, p, rect, *on);
+    let pos = ui.ctx().animate_bool(response.id, *on);
+    paint_toggle(ui, p, rect, pos);
     response
 }
 
-fn paint_toggle(ui: &mut Ui, p: Palette, rect: egui::Rect, on: bool) {
-    let track = if on { p.accent } else { p.text_muted };
-    ui.painter().rect_filled(rect, CornerRadius::same(RADIUS_FULL), track);
-    let knob_radius = 6.0; // "12 px knob" in DESIGN.md
-    let pad = GAP_XS; // "padding 4" in DESIGN.md
-    let cx = if on {
-        rect.right() - pad - knob_radius
-    } else {
-        rect.left() + pad + knob_radius
-    };
-    ui.painter().circle_filled(egui::pos2(cx, rect.center().y), knob_radius, p.bg_surface);
+/// Track = accent when on, `text.muted` when off; the knob is a kilim-tema bead
+/// that slides with `pos` (0 = off, 1 = on).
+fn paint_toggle(ui: &mut Ui, p: Palette, rect: egui::Rect, pos: f32) {
+    let track = if pos > 0.5 { p.accent } else { p.text_muted };
+    kilim_tema::anahtar_ciz(ui.painter(), rect, pos, track);
 }
 
 /// Editable twin of `input_box` (Model): same look (window bg, 1 px border,

@@ -621,7 +621,7 @@ fn connections_screen(ui: &mut Ui, p: Palette, conn: &Arc<ConnState>) {
         }
         ui.add_space(theme::GAP_SM);
         let mut docker = conn.docker.load(Ordering::Relaxed);
-        if ui.checkbox(&mut docker, "Runs in Docker").changed() {
+        if kilim_tema::kutu(ui, &mut docker, "Runs in Docker").changed() {
             conn.docker.store(docker, Ordering::Relaxed);
         }
     });

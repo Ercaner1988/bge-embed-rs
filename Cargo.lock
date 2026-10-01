@@ -2448,7 +2448,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 [[package]]
 name = "kilim-tema"
 version = "0.1.0"
-source = "git+https://github.com/Ercaner1988/kilim-tema?rev=ddd1484c7855319877a3442e1bfceeacc5afe64d#ddd1484c7855319877a3442e1bfceeacc5afe64d"
+source = "git+https://github.com/Ercaner1988/kilim-tema?rev=d1c8d2cbdcb4ace6ddbbd842a449ba9775d6fae8#d1c8d2cbdcb4ace6ddbbd842a449ba9775d6fae8"
 dependencies = [
  "egui",
  "image",

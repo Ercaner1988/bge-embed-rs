@@ -212,7 +212,7 @@ pub fn sunken(ctx: &egui::Context) -> Sunken {
 
 /// Paper texture (multiplied by `tone`) under `rect`, with the 1 px control border.
 fn paper(ui: &Ui, rect: egui::Rect, tone: Color32, p: Palette) {
-    kilim_tema::kagit_ciz(ui.painter(), rect, tone);
+    kilim_tema::kagit_ciz_yuvarlak(ui.painter(), rect, tone, CornerRadius::same(RADIUS_CONTROL));
     ui.painter().rect_stroke(
         rect,
         CornerRadius::same(RADIUS_CONTROL),
@@ -449,11 +449,18 @@ pub fn toggle(ui: &mut Ui, p: Palette, on: &mut bool) -> Response {
     response
 }
 
-/// Track = accent when on, `text.muted` when off; the knob is a kilim-tema bead
+/// Track = the same sunken paper as the text boxes when off (the opposite
+/// theme's paper), accent-tinted paper when on; the knob is a kilim-tema bead
 /// that slides with `pos` (0 = off, 1 = on).
 fn paint_toggle(ui: &mut Ui, p: Palette, rect: egui::Rect, pos: f32) {
-    let track = if pos > 0.5 { p.accent } else { p.text_muted };
+    let track = if pos > 0.5 { p.accent } else { sunken(ui.ctx()).tone };
     kilim_tema::anahtar_ciz(ui.painter(), rect, pos, track);
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(RADIUS_FULL),
+        Stroke::new(BORDER_WIDTH, p.border),
+        StrokeKind::Inside,
+    );
 }
 
 /// Editable twin of `input_box` (Model): same look (window bg, 1 px border,
@@ -483,15 +490,17 @@ fn on_paper(ui: &mut Ui, p: Palette, size: Vec2, edit: egui::TextEdit<'_>) -> Re
     let s = sunken(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     paper(ui, rect, s.tone, p);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    // The inset lives on the child rect: with `Frame::NONE` the TextEdit drops its margin.
+    let inner = rect.shrink2(Vec2::new(INSET_SM, 0.0));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner));
     child.visuals_mut().selection.bg_fill = p.accent;
     child.visuals_mut().weak_text_color = Some(s.ink_muted);
     child.add_sized(
-        size,
+        inner.size(),
         edit.frame(egui::Frame::NONE)
+            .vertical_align(egui::Align::Center)
             .font(font(SIZE_BODY, Weight::Regular))
-            .text_color(s.ink)
-            .margin(Margin::symmetric(INSET_SM as i8, 0)),
+            .text_color(s.ink),
     )
 }
 

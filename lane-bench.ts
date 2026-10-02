@@ -39,7 +39,7 @@ const embed = (input: string[]) =>
 async function run(name: string, exe: string, permit?: string) {
   const env: Record<string, string | undefined> = { ...process.env, BGE_PORT: String(PORT), BGE_PARALLEL: "4" };
   if (permit) env.BGE_TOPLU_IZIN = permit; else delete env.BGE_TOPLU_IZIN;
-  const proc = spawn(exe, { env, stdio: "ignore" });
+  const proc = spawn(exe, ["--headless"], { env, stdio: "ignore" });
   const exited = new Promise((r) => proc.once("exit", r));
   for (let i = 0; ; i++) {
     try { if ((await fetch(`${URL}/health`)).ok) break; } catch {}

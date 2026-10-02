@@ -1,15 +1,17 @@
 // bench.ts - compares embedding backends on identical input, rotating the order every round.
 // Usage: BENCH_SOURCE=book.txt bun bench.ts <name=port> [name=port ...]
 //   e.g. BENCH_SOURCE=book.txt bun bench.ts native=11434 v3=11435
+// Runs on Bun (recommended) and on Node 22.18+ (`node bench.ts ...`).
 // Env: BENCH_SOURCE (plain-text file, required, >= ~70 KB), BENCH_ROUNDS (3), BENCH_BATCH (8 chunks/request).
-const targets = Bun.argv.slice(2).map((a) => { const [name, port] = a.split("="); return { name, url: `http://127.0.0.1:${port}/v1/embeddings` }; });
+import { readFile } from "node:fs/promises";
+const targets = process.argv.slice(2).map((a) => { const [name, port] = a.split("="); return { name, url: `http://127.0.0.1:${port}/v1/embeddings` }; });
 const ROUNDS = Number(process.env.BENCH_ROUNDS ?? 3);
 const BATCH = Number(process.env.BENCH_BATCH ?? 8);
 if (!process.env.BENCH_SOURCE || targets.length === 0) {
   console.error("usage: BENCH_SOURCE=<text file> bun bench.ts <name=port> [name=port ...]");
   process.exit(1);
 }
-const source = await Bun.file(process.env.BENCH_SOURCE).text();
+const source = await readFile(process.env.BENCH_SOURCE, "utf8");
 
 // ~1500-char chunks (a typical RAG chunk size); every round uses fresh chunks.
 const chunks: string[] = [];

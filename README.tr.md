@@ -81,11 +81,13 @@ Taşınabilir `x86-64-v3` sürümü, aynı makinedeki bir `target-cpu=native` de
 
 Vektörler, bir llama.cpp bge-m3 referans sunucusuyla ≥ 0,9999 cosine benzerliğinde eşleşiyor (CLS havuzlama, L2 normalizasyon).
 
-Tekrarlamak için farklı portlarda iki sunucu çalıştırın ve [Bun](https://bun.sh) kurulu olsun:
+Tekrarlamak için farklı portlarda iki sunucu çalıştırın ve [Bun](https://bun.sh) kurulu olsun (karşılaştırma betikleri için önerilen çalışma zamanı):
 
 ```bash
 BENCH_SOURCE=book.txt bun bench.ts native=11434 v3=11435
 ```
+
+Betikler yalnızca taşınabilir API kullanır; Node.js 22.18 ve üstü de doğrudan çalıştırır (`node bench.ts ...`, `node lane-bench.ts ...`). Bun önerilen yoldur.
 
 ### Eşzamanlılık: kısa sorgular ve toplu işler
 

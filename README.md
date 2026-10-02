@@ -81,11 +81,13 @@ The portable `x86-64-v3` release build performs the same as a `target-cpu=native
 
 Vectors match a llama.cpp bge-m3 reference server at cosine similarity ≥ 0.9999 (CLS pooling, L2-normalized).
 
-To reproduce, run two servers on different ports and, with [Bun](https://bun.sh) installed:
+To reproduce, run two servers on different ports and, with [Bun](https://bun.sh) installed (the recommended runtime for the benchmark scripts):
 
 ```bash
 BENCH_SOURCE=book.txt bun bench.ts native=11434 v3=11435
 ```
+
+The scripts use only portable APIs, so Node.js 22.18 or newer also runs them directly (`node bench.ts ...`, `node lane-bench.ts ...`); Bun is simply the recommended choice.
 
 ### Concurrency: short queries vs. batch jobs
 

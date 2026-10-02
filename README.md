@@ -122,6 +122,6 @@ Code is [MIT licensed](LICENSE).
 
 The server downloads and runs [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3); check its license on that page before using it.
 
-The bundled Inter font is licensed under the [SIL Open Font License 1.1](assets/fonts/LICENSE.txt).
+The bundled Inter font is licensed under the [SIL Open Font License 1.1](crates/bge-theme/assets/fonts/LICENSE.txt).
 
 Built with [candle](https://github.com/huggingface/candle), [egui/eframe](https://github.com/emilk/egui), [axum](https://github.com/tokio-rs/axum), and [hf-hub](https://github.com/huggingface/hf-hub).

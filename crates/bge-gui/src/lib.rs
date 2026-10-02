@@ -2,10 +2,10 @@
 //! Settings, switched by a bottom nav bar. All styling comes from
 //! `theme.rs` - no inline hex/spacing/radius/size literals here.
 
-use crate::autostart;
-use crate::connectors::{self, Tool};
-use crate::theme::{self, Palette, Weight};
-use crate::{Phase, Status, effective_host, effective_model, effective_parallel, effective_port};
+mod autostart;
+use bge_connectors::{self as connectors, Tool};
+use bge_theme::{self as theme, Palette, Weight};
+use bge_settings::{Phase, Status, effective_host, effective_model, effective_parallel, effective_port, save_model_setting};
 use eframe::egui::{self, Align, Color32, Layout, Ui};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

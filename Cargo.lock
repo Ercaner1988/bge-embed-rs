@@ -476,23 +476,60 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bge-connectors"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "serde",
+ "serde_json",
+ "tokio",
+ "ureq",
+]
+
+[[package]]
 name = "bge-embed-rs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bge-gui",
+ "bge-settings",
+ "bge-theme",
  "candle-core",
  "candle-nn",
  "candle-transformers",
  "eframe",
  "hf-hub",
- "kilim-tema",
  "serde",
  "serde_json",
  "tokenizers",
  "tokio",
- "ureq",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "bge-gui"
+version = "0.1.0"
+dependencies = [
+ "bge-connectors",
+ "bge-settings",
+ "bge-theme",
+ "eframe",
+ "kilim-tema",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "bge-settings"
+version = "0.1.0"
+
+[[package]]
+name = "bge-theme"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "kilim-tema",
 ]
 
 [[package]]

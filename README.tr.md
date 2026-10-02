@@ -122,6 +122,6 @@ Kod [MIT lisanslıdır](LICENSE).
 
 Sunucu [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) modelini indirip çalıştırır; kullanmadan önce lisansını o sayfadan kontrol edin.
 
-Pakete dahil Inter yazı tipi [SIL Open Font License 1.1](assets/fonts/LICENSE.txt) ile lisanslıdır.
+Pakete dahil Inter yazı tipi [SIL Open Font License 1.1](crates/bge-theme/assets/fonts/LICENSE.txt) ile lisanslıdır.
 
 [candle](https://github.com/huggingface/candle), [egui/eframe](https://github.com/emilk/egui), [axum](https://github.com/tokio-rs/axum) ve [hf-hub](https://github.com/huggingface/hf-hub) ile geliştirildi.

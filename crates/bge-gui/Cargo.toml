@@ -1,0 +1,17 @@
+[package]
+name = "bge-gui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "bge-embed-rs: the three-screen egui window"
+repository.workspace = true
+
+[dependencies]
+bge-settings.workspace = true
+bge-connectors.workspace = true
+bge-theme.workspace = true
+eframe.workspace = true
+kilim-tema.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

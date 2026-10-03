@@ -476,6 +476,7 @@ fn main() -> Result<()> {
         // to a black window on some Windows 11 + AMD/Intel-iGPU combinations).
         renderer: eframe::Renderer::Wgpu,
         viewport: eframe::egui::ViewportBuilder::default()
+            .with_title("bge-embed-rs")
             .with_inner_size([480.0, 560.0])
             .with_min_inner_size([480.0, 560.0])
             .with_transparent(false),

@@ -453,7 +453,11 @@ pub fn toggle(ui: &mut Ui, p: Palette, on: &mut bool) -> Response {
 /// theme's paper), accent-tinted paper when on; the knob is a kilim-tema bead
 /// that slides with `pos` (0 = off, 1 = on).
 fn paint_toggle(ui: &mut Ui, p: Palette, rect: egui::Rect, pos: f32) {
-    let track = if pos > 0.5 { p.accent } else { sunken(ui.ctx()).tone };
+    let track = if pos > 0.5 {
+        p.accent
+    } else {
+        sunken(ui.ctx()).tone
+    };
     kilim_tema::anahtar_ciz(ui.painter(), rect, pos, track);
     ui.painter().rect_stroke(
         rect,

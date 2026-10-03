@@ -31,7 +31,11 @@ pub enum Status {
 /// `http://127.0.0.1:{port}/v1` by default, or `http://host.docker.internal:{port}/v1`
 /// when the row's "Runs in Docker" checkbox is on (DESIGN.md Connections screen).
 pub fn embedding_url(port: &str, docker: bool) -> String {
-    let host = if docker { "host.docker.internal" } else { "127.0.0.1" };
+    let host = if docker {
+        "host.docker.internal"
+    } else {
+        "127.0.0.1"
+    };
     format!("http://{host}:{port}/v1")
 }
 
@@ -106,8 +110,12 @@ impl Tool {
             Tool::OpenNotebook => {
                 "Default embedding model changed. Existing sources may need re-embedding for consistent search."
             }
-            Tool::OpenWebUi => "Embedding model changed. Re-index your knowledge bases in Open WebUI.",
-            Tool::AnythingLlm => "Embedding model changed. Existing workspaces need to be re-embedded.",
+            Tool::OpenWebUi => {
+                "Embedding model changed. Re-index your knowledge bases in Open WebUI."
+            }
+            Tool::AnythingLlm => {
+                "Embedding model changed. Existing workspaces need to be re-embedded."
+            }
         }
     }
 
@@ -130,19 +138,39 @@ impl Tool {
     /// `confirm_reset` only matters for `Tool::AnythingLlm` (see
     /// `ConnectOutcome`/`AnythingLlm::plan` below) - Open Notebook and Open
     /// WebUI's `connect()` never delete anything, so it's ignored for them.
-    pub fn connect(self, base_url: &str, embed_url: &str, key: Option<&str>, confirm_reset: bool) -> anyhow::Result<ConnectOutcome> {
+    pub fn connect(
+        self,
+        base_url: &str,
+        embed_url: &str,
+        key: Option<&str>,
+        confirm_reset: bool,
+    ) -> anyhow::Result<ConnectOutcome> {
         match self {
-            Tool::OpenNotebook => OpenNotebook::connect(base_url, embed_url, key).map(ConnectOutcome::Done),
-            Tool::OpenWebUi => OpenWebUi::connect(base_url, embed_url, key).map(ConnectOutcome::Done),
+            Tool::OpenNotebook => {
+                OpenNotebook::connect(base_url, embed_url, key).map(ConnectOutcome::Done)
+            }
+            Tool::OpenWebUi => {
+                OpenWebUi::connect(base_url, embed_url, key).map(ConnectOutcome::Done)
+            }
             Tool::AnythingLlm => AnythingLlm::connect(base_url, embed_url, key, confirm_reset),
         }
     }
 
     /// `confirm_reset` only matters for `Tool::AnythingLlm`, same as `connect`.
-    pub fn disconnect(self, base_url: &str, embed_url: &str, key: Option<&str>, confirm_reset: bool) -> anyhow::Result<ConnectOutcome> {
+    pub fn disconnect(
+        self,
+        base_url: &str,
+        embed_url: &str,
+        key: Option<&str>,
+        confirm_reset: bool,
+    ) -> anyhow::Result<ConnectOutcome> {
         match self {
-            Tool::OpenNotebook => OpenNotebook::disconnect(base_url, embed_url, key).map(ConnectOutcome::Done),
-            Tool::OpenWebUi => OpenWebUi::disconnect(base_url, embed_url, key).map(ConnectOutcome::Done),
+            Tool::OpenNotebook => {
+                OpenNotebook::disconnect(base_url, embed_url, key).map(ConnectOutcome::Done)
+            }
+            Tool::OpenWebUi => {
+                OpenWebUi::disconnect(base_url, embed_url, key).map(ConnectOutcome::Done)
+            }
             Tool::AnythingLlm => AnythingLlm::disconnect(base_url, embed_url, key, confirm_reset),
         }
     }
@@ -218,15 +246,23 @@ impl OpenNotebook {
             return Status::NotFound;
         }
         let agent = agent(Duration::from_millis(1500));
-        let defaults = match get_json::<DefaultModels>(&agent, base_url, "/api/models/defaults", password) {
-            Ok(d) => d,
-            Err(e) if matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Unauthorized)) => return Status::NeedsKey,
-            Err(_) => return Status::Found,
-        };
+        let defaults =
+            match get_json::<DefaultModels>(&agent, base_url, "/api/models/defaults", password) {
+                Ok(d) => d,
+                Err(e) if matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Unauthorized)) => {
+                    return Status::NeedsKey;
+                }
+                Err(_) => return Status::Found,
+            };
         let Some(model_id) = defaults.default_embedding_model else {
             return Status::Found;
         };
-        let models = match get_json::<Vec<ModelSummary>>(&agent, base_url, "/api/models?type=embedding", password) {
+        let models = match get_json::<Vec<ModelSummary>>(
+            &agent,
+            base_url,
+            "/api/models?type=embedding",
+            password,
+        ) {
             Ok(m) => m,
             Err(_) => return Status::Found,
         };
@@ -236,7 +272,12 @@ impl OpenNotebook {
         let Some(cred_id) = model.credential else {
             return Status::Found;
         };
-        let creds = match get_json::<Vec<CredentialSummary>>(&agent, base_url, "/api/credentials", password) {
+        let creds = match get_json::<Vec<CredentialSummary>>(
+            &agent,
+            base_url,
+            "/api/credentials",
+            password,
+        ) {
             Ok(c) => c,
             Err(_) => return Status::Found,
         };
@@ -259,20 +300,28 @@ impl OpenNotebook {
     /// model means existing Open Notebook sources must be re-embedded for
     /// search to stay consistent - this function only flips the pointer, it
     /// never triggers or performs re-embedding of anything.
-    pub fn connect(base_url: &str, embed_url: &str, password: Option<&str>) -> anyhow::Result<bool> {
+    pub fn connect(
+        base_url: &str,
+        embed_url: &str,
+        password: Option<&str>,
+    ) -> anyhow::Result<bool> {
         let agent = agent(Duration::from_secs(5));
         let cred_id = Self::find_or_create_credential(&agent, base_url, embed_url, password)?;
         let model_id = Self::find_or_create_model(&agent, base_url, &cred_id, embed_url, password)?;
 
-        let defaults = get_json::<DefaultModels>(&agent, base_url, "/api/models/defaults", password)?;
-        let already_default = defaults.default_embedding_model.as_deref() == Some(model_id.as_str());
+        let defaults =
+            get_json::<DefaultModels>(&agent, base_url, "/api/models/defaults", password)?;
+        let already_default =
+            defaults.default_embedding_model.as_deref() == Some(model_id.as_str());
         if !already_default {
             put_json(
                 &agent,
                 base_url,
                 "/api/models/defaults",
                 password,
-                &DefaultsPatch { default_embedding_model: &model_id },
+                &DefaultsPatch {
+                    default_embedding_model: &model_id,
+                },
             )?;
         }
         Ok(!already_default)
@@ -290,7 +339,10 @@ impl OpenNotebook {
             "/api/credentials?provider=openai_compatible",
             password,
         )?;
-        if let Some(c) = existing.into_iter().find(|c| c.base_url.as_deref() == Some(embed_url)) {
+        if let Some(c) = existing
+            .into_iter()
+            .find(|c| c.base_url.as_deref() == Some(embed_url))
+        {
             return Ok(c.id);
         }
         let created = post_json::<_, CredentialSummary>(
@@ -347,7 +399,11 @@ impl OpenNotebook {
             .iter()
             .any(|m| m.name.eq_ignore_ascii_case(Self::MODEL_NAME) && m.provider == Self::PROVIDER);
         let name = if name_taken {
-            format!("{} (bge-embed-rs :{})", Self::MODEL_NAME, port_of(embed_url))
+            format!(
+                "{} (bge-embed-rs :{})",
+                Self::MODEL_NAME,
+                port_of(embed_url)
+            )
         } else {
             Self::MODEL_NAME.to_string()
         };
@@ -385,7 +441,11 @@ impl OpenNotebook {
     /// can't clear that default (api/routers/models.py:333-336), so deleting
     /// the model would leave it dangling and every later embedding job would
     /// fail. The user picks another default in Open Notebook first.
-    pub fn disconnect(base_url: &str, embed_url: &str, password: Option<&str>) -> anyhow::Result<bool> {
+    pub fn disconnect(
+        base_url: &str,
+        embed_url: &str,
+        password: Option<&str>,
+    ) -> anyhow::Result<bool> {
         let agent = agent(Duration::from_secs(5));
         let existing = get_json::<Vec<CredentialSummary>>(
             &agent,
@@ -393,14 +453,20 @@ impl OpenNotebook {
             "/api/credentials?provider=openai_compatible",
             password,
         )?;
-        let Some(cred) = existing
-            .into_iter()
-            .find(|c| c.base_url.as_deref() == Some(embed_url) && c.name.as_deref() == Some(Self::CREDENTIAL_NAME))
-        else {
+        let Some(cred) = existing.into_iter().find(|c| {
+            c.base_url.as_deref() == Some(embed_url)
+                && c.name.as_deref() == Some(Self::CREDENTIAL_NAME)
+        }) else {
             return Ok(false);
         };
-        let defaults = get_json::<DefaultModels>(&agent, base_url, "/api/models/defaults", password)?;
-        let models = get_json::<Vec<ModelSummary>>(&agent, base_url, "/api/models?type=embedding", password)?;
+        let defaults =
+            get_json::<DefaultModels>(&agent, base_url, "/api/models/defaults", password)?;
+        let models = get_json::<Vec<ModelSummary>>(
+            &agent,
+            base_url,
+            "/api/models?type=embedding",
+            password,
+        )?;
         let ours_is_default = models.iter().any(|m| {
             m.credential.as_deref() == Some(cred.id.as_str())
                 && defaults.default_embedding_model.as_deref() == Some(m.id.as_str())
@@ -410,14 +476,23 @@ impl OpenNotebook {
                 "bge-m3 is Open Notebook's default embedding model. Pick another default in Open Notebook (Settings > Models) first, then disconnect."
             );
         }
-        delete(&agent, base_url, &format!("/api/credentials/{}", cred.id), password)?;
+        delete(
+            &agent,
+            base_url,
+            &format!("/api/credentials/{}", cred.id),
+            password,
+        )?;
         Ok(true)
     }
 }
 
 /// `"http://host:port/v1"` -> `"port"`, for the disambiguated model name.
 fn port_of(embed_url: &str) -> &str {
-    embed_url.rsplit(':').next().unwrap_or("").trim_end_matches("/v1")
+    embed_url
+        .rsplit(':')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches("/v1")
 }
 
 #[derive(Deserialize, Default)]
@@ -542,7 +617,12 @@ fn put_json<B: Serialize>(
     Ok(resp.into_json::<Value>().unwrap_or(Value::Null))
 }
 
-fn delete(agent: &ureq::Agent, base_url: &str, path: &str, password: Option<&str>) -> anyhow::Result<()> {
+fn delete(
+    agent: &ureq::Agent,
+    base_url: &str,
+    path: &str,
+    password: Option<&str>,
+) -> anyhow::Result<()> {
     auth(agent.delete(&format!("{base_url}{path}")), password)
         .call()
         .map_err(map_status)?;
@@ -601,9 +681,16 @@ impl OpenWebUi {
             return Status::NotFound;
         }
         let agent = agent(Duration::from_millis(1500));
-        let cfg = match get_json::<OwuiEmbeddingConfig>(&agent, base_url, "/api/v1/retrieval/embedding", key) {
+        let cfg = match get_json::<OwuiEmbeddingConfig>(
+            &agent,
+            base_url,
+            "/api/v1/retrieval/embedding",
+            key,
+        ) {
             Ok(c) => c,
-            Err(e) if matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Unauthorized)) => return Status::NeedsKey,
+            Err(e) if matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Unauthorized)) => {
+                return Status::NeedsKey;
+            }
             Err(_) => return Status::Found,
         };
         if cfg.rag_embedding_engine == Self::ENGINE
@@ -628,7 +715,8 @@ impl OpenWebUi {
     /// config, it never triggers or performs that reindex itself.
     pub fn connect(base_url: &str, embed_url: &str, key: Option<&str>) -> anyhow::Result<bool> {
         let agent = agent(Duration::from_secs(5));
-        let cfg = get_json::<OwuiEmbeddingConfig>(&agent, base_url, "/api/v1/retrieval/embedding", key)?;
+        let cfg =
+            get_json::<OwuiEmbeddingConfig>(&agent, base_url, "/api/v1/retrieval/embedding", key)?;
         let already = cfg.rag_embedding_engine == Self::ENGINE
             && cfg.rag_embedding_model == Self::MODEL_NAME
             && cfg.openai_config.as_ref().and_then(|o| o.url.as_deref()) == Some(embed_url);
@@ -641,7 +729,10 @@ impl OpenWebUi {
             "/api/v1/retrieval/embedding/update",
             key,
             &OwuiUpdateEmbeddingReq {
-                openai_config: OwuiOpenAiConfig { url: embed_url, key: Self::API_KEY_PLACEHOLDER },
+                openai_config: OwuiOpenAiConfig {
+                    url: embed_url,
+                    key: Self::API_KEY_PLACEHOLDER,
+                },
                 rag_embedding_engine: Self::ENGINE,
                 rag_embedding_model: Self::MODEL_NAME,
                 rag_embedding_batch_size: cfg.rag_embedding_batch_size,
@@ -660,7 +751,8 @@ impl OpenWebUi {
     /// Open WebUI after this, same as connecting.
     pub fn disconnect(base_url: &str, embed_url: &str, key: Option<&str>) -> anyhow::Result<bool> {
         let agent = agent(Duration::from_secs(5));
-        let cfg = get_json::<OwuiEmbeddingConfig>(&agent, base_url, "/api/v1/retrieval/embedding", key)?;
+        let cfg =
+            get_json::<OwuiEmbeddingConfig>(&agent, base_url, "/api/v1/retrieval/embedding", key)?;
         let connected = cfg.rag_embedding_engine == Self::ENGINE
             && cfg.openai_config.as_ref().and_then(|o| o.url.as_deref()) == Some(embed_url);
         if !connected {
@@ -791,7 +883,10 @@ impl AnythingLlm {
     pub fn detect(base_url: &str) -> bool {
         let agent = agent(Duration::from_millis(1500));
         match agent.get(&format!("{base_url}/api/ping")).call() {
-            Ok(resp) => resp.into_json::<AlPingResponse>().map(|r| r.online).unwrap_or(false),
+            Ok(resp) => resp
+                .into_json::<AlPingResponse>()
+                .map(|r| r.online)
+                .unwrap_or(false),
             Err(_) => false,
         }
     }
@@ -807,7 +902,9 @@ impl AnythingLlm {
         let agent = agent(Duration::from_millis(1500));
         let settings = match get_json::<AlSystemResp>(&agent, base_url, "/api/v1/system", key) {
             Ok(s) => s.settings,
-            Err(e) if matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Http(403))) => return Status::NeedsKey,
+            Err(e) if matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Http(403))) => {
+                return Status::NeedsKey;
+            }
             Err(_) => return Status::Found,
         };
         if settings.embedding_engine.as_deref() == Some(Self::ENGINE)
@@ -847,7 +944,10 @@ impl AnythingLlm {
         // destructive write slip through beforehand.
         let mut writes = Vec::new();
         if settings.embedding_base_path.as_deref() != Some(embed_url) {
-            writes.push(AlWrite { key: "EmbeddingBasePath", value: embed_url.to_string() });
+            writes.push(AlWrite {
+                key: "EmbeddingBasePath",
+                value: embed_url.to_string(),
+            });
         }
         if settings.embedding_model_max_chunk_length.as_deref() != Some(Self::MAX_CHUNK_LENGTH) {
             writes.push(AlWrite {
@@ -862,11 +962,20 @@ impl AnythingLlm {
             });
         }
         if triggers_reset {
-            writes.push(AlWrite { key: "EmbeddingEngine", value: Self::ENGINE.to_string() });
-            writes.push(AlWrite { key: "EmbeddingModelPref", value: Self::MODEL_NAME.to_string() });
+            writes.push(AlWrite {
+                key: "EmbeddingEngine",
+                value: Self::ENGINE.to_string(),
+            });
+            writes.push(AlWrite {
+                key: "EmbeddingModelPref",
+                value: Self::MODEL_NAME.to_string(),
+            });
         }
 
-        Ok(AlPlan { writes, triggers_reset })
+        Ok(AlPlan {
+            writes,
+            triggers_reset,
+        })
     }
 
     /// Idempotent and confirmation-gated: `plan()` first. If nothing would
@@ -883,7 +992,12 @@ impl AnythingLlm {
     /// Per DESIGN.md: switching the embedder means existing workspaces need
     /// re-embedding in AnythingLLM - this never triggers or performs that
     /// re-embed itself, only the (confirmed) config write.
-    pub fn connect(base_url: &str, embed_url: &str, key: Option<&str>, confirm_reset: bool) -> anyhow::Result<ConnectOutcome> {
+    pub fn connect(
+        base_url: &str,
+        embed_url: &str,
+        key: Option<&str>,
+        confirm_reset: bool,
+    ) -> anyhow::Result<ConnectOutcome> {
         let plan = Self::plan(base_url, embed_url, key)?;
         if plan.writes.is_empty() {
             return Ok(ConnectOutcome::Done(false));
@@ -896,10 +1010,18 @@ impl AnythingLlm {
         for write in &plan.writes {
             let mut body = serde_json::Map::new();
             body.insert(write.key.to_string(), Value::String(write.value.clone()));
-            let resp = post_json::<_, AlUpdateEnvResp>(&agent, base_url, "/api/v1/system/update-env", key, &Value::Object(body))?;
+            let resp = post_json::<_, AlUpdateEnvResp>(
+                &agent,
+                base_url,
+                "/api/v1/system/update-env",
+                key,
+                &Value::Object(body),
+            )?;
             if let Some(msg) = resp.error.as_str() {
                 let hint = if write.key == "EmbeddingBasePath" {
-                    format!("{msg} (if AnythingLLM runs in Docker, try the \"Runs in Docker\" toggle)")
+                    format!(
+                        "{msg} (if AnythingLLM runs in Docker, try the \"Runs in Docker\" toggle)"
+                    )
                 } else {
                     msg.to_string()
                 };
@@ -915,7 +1037,12 @@ impl AnythingLlm {
     /// (`Done(false)`) otherwise. The revert is itself an engine *change*,
     /// so it triggers the same vector-store reset as `connect` and is
     /// gated by `confirm_reset` the same way (see `plan`'s citation).
-    pub fn disconnect(base_url: &str, embed_url: &str, key: Option<&str>, confirm_reset: bool) -> anyhow::Result<ConnectOutcome> {
+    pub fn disconnect(
+        base_url: &str,
+        embed_url: &str,
+        key: Option<&str>,
+        confirm_reset: bool,
+    ) -> anyhow::Result<ConnectOutcome> {
         let agent = agent(Duration::from_secs(5));
         let settings = get_json::<AlSystemResp>(&agent, base_url, "/api/v1/system", key)?.settings;
         let connected = settings.embedding_engine.as_deref() == Some(Self::ENGINE)
@@ -1035,7 +1162,7 @@ mod tests {
     #[derive(Default)]
     struct FakeState {
         credentials: Vec<(String, String, String, String)>, // (id, base_url, provider, name)
-        models: Vec<(String, String, String, String)>,  // (id, name, provider, credential)
+        models: Vec<(String, String, String, String)>,      // (id, name, provider, credential)
         default_embedding_model: Option<String>,
         next_id: u32,
         password: Option<&'static str>,
@@ -1053,7 +1180,11 @@ mod tests {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
             == Some(expected);
-        if ok { Ok(()) } else { Err(StatusCode::UNAUTHORIZED) }
+        if ok {
+            Ok(())
+        } else {
+            Err(StatusCode::UNAUTHORIZED)
+        }
     }
 
     async fn root() -> Json<Value> {
@@ -1089,11 +1220,18 @@ mod tests {
         let base_url = body["base_url"].as_str().unwrap_or_default().to_string();
         let provider = body["provider"].as_str().unwrap_or_default().to_string();
         let name = body["name"].as_str().unwrap_or_default().to_string();
-        s.credentials.push((id.clone(), base_url.clone(), provider, name));
-        Ok((StatusCode::CREATED, Json(serde_json::json!({"id": id, "base_url": base_url}))))
+        s.credentials
+            .push((id.clone(), base_url.clone(), provider, name));
+        Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!({"id": id, "base_url": base_url})),
+        ))
     }
 
-    async fn list_models(State(state): State<Shared>, headers: HeaderMap) -> Result<Json<Value>, StatusCode> {
+    async fn list_models(
+        State(state): State<Shared>,
+        headers: HeaderMap,
+    ) -> Result<Json<Value>, StatusCode> {
         check_auth(&state, &headers)?;
         let s = state.lock().unwrap();
         let items: Vec<_> = s
@@ -1117,19 +1255,37 @@ mod tests {
         let provider = body["provider"].as_str().unwrap_or_default().to_string();
         let credential = body["credential"].as_str().unwrap_or_default().to_string();
         // api/routers/models.py:217-232 - duplicate (provider, name, type) -> 400.
-        if s.models.iter().any(|(_, n, p, _)| n.eq_ignore_ascii_case(&name) && *p == provider) {
+        if s.models
+            .iter()
+            .any(|(_, n, p, _)| n.eq_ignore_ascii_case(&name) && *p == provider)
+        {
             return Err(StatusCode::BAD_REQUEST);
         }
         s.next_id += 1;
         let id = format!("model:{}", s.next_id);
-        s.models.push((id.clone(), name.clone(), provider.clone(), credential.clone()));
-        Ok((StatusCode::CREATED, Json(serde_json::json!({"id": id, "name": name, "provider": provider, "credential": credential}))))
+        s.models.push((
+            id.clone(),
+            name.clone(),
+            provider.clone(),
+            credential.clone(),
+        ));
+        Ok((
+            StatusCode::CREATED,
+            Json(
+                serde_json::json!({"id": id, "name": name, "provider": provider, "credential": credential}),
+            ),
+        ))
     }
 
-    async fn get_defaults(State(state): State<Shared>, headers: HeaderMap) -> Result<Json<Value>, StatusCode> {
+    async fn get_defaults(
+        State(state): State<Shared>,
+        headers: HeaderMap,
+    ) -> Result<Json<Value>, StatusCode> {
         check_auth(&state, &headers)?;
         let s = state.lock().unwrap();
-        Ok(Json(serde_json::json!({"default_embedding_model": s.default_embedding_model})))
+        Ok(Json(
+            serde_json::json!({"default_embedding_model": s.default_embedding_model}),
+        ))
     }
 
     async fn put_defaults(
@@ -1139,8 +1295,12 @@ mod tests {
     ) -> Result<Json<Value>, StatusCode> {
         check_auth(&state, &headers)?;
         let mut s = state.lock().unwrap();
-        s.default_embedding_model = body["default_embedding_model"].as_str().map(|s| s.to_string());
-        Ok(Json(serde_json::json!({"default_embedding_model": s.default_embedding_model})))
+        s.default_embedding_model = body["default_embedding_model"]
+            .as_str()
+            .map(|s| s.to_string());
+        Ok(Json(
+            serde_json::json!({"default_embedding_model": s.default_embedding_model}),
+        ))
     }
 
     /// Mirrors the real cascade-delete (api/routers/credentials.py:305-368):
@@ -1173,10 +1333,16 @@ mod tests {
                 let listener = tokio::net::TcpListener::from_std(listener).unwrap();
                 let app = Router::new()
                     .route("/", get(root))
-                    .route("/api/credentials", get(list_credentials).post(create_credential))
+                    .route(
+                        "/api/credentials",
+                        get(list_credentials).post(create_credential),
+                    )
                     .route("/api/models", get(list_models).post(create_model))
                     .route("/api/models/defaults", get(get_defaults).put(put_defaults))
-                    .route("/api/credentials/{id}", axum::routing::delete(delete_credential))
+                    .route(
+                        "/api/credentials/{id}",
+                        axum::routing::delete(delete_credential),
+                    )
                     .with_state(app_state);
                 axum::serve(listener, app).await.unwrap();
             });
@@ -1198,7 +1364,10 @@ mod tests {
         let (base_url, state) = spawn_fake_server(None);
         let embed_url = "http://127.0.0.1:11435/v1";
 
-        assert_eq!(OpenNotebook::status(&base_url, embed_url, None), Status::Found);
+        assert_eq!(
+            OpenNotebook::status(&base_url, embed_url, None),
+            Status::Found
+        );
 
         let changed = OpenNotebook::connect(&base_url, embed_url, None).unwrap();
         assert!(changed, "first connect must flip the default");
@@ -1207,9 +1376,15 @@ mod tests {
             assert_eq!(s.credentials.len(), 1);
             assert_eq!(s.models.len(), 1);
             assert_eq!(s.models[0].1, "bge-m3");
-            assert_eq!(s.default_embedding_model.as_deref(), Some(s.models[0].0.as_str()));
+            assert_eq!(
+                s.default_embedding_model.as_deref(),
+                Some(s.models[0].0.as_str())
+            );
         }
-        assert_eq!(OpenNotebook::status(&base_url, embed_url, None), Status::Connected);
+        assert_eq!(
+            OpenNotebook::status(&base_url, embed_url, None),
+            Status::Connected
+        );
 
         // Second connect must not create a duplicate credential or model,
         // and must report nothing changed.
@@ -1225,11 +1400,17 @@ mod tests {
         let (base_url, _state) = spawn_fake_server(Some("hunter2"));
         let embed_url = "http://127.0.0.1:11435/v1";
 
-        assert_eq!(OpenNotebook::status(&base_url, embed_url, None), Status::NeedsKey);
+        assert_eq!(
+            OpenNotebook::status(&base_url, embed_url, None),
+            Status::NeedsKey
+        );
         assert!(OpenNotebook::connect(&base_url, embed_url, None).is_err());
 
         OpenNotebook::connect(&base_url, embed_url, Some("hunter2")).unwrap();
-        assert_eq!(OpenNotebook::status(&base_url, embed_url, Some("hunter2")), Status::Connected);
+        assert_eq!(
+            OpenNotebook::status(&base_url, embed_url, Some("hunter2")),
+            Status::Connected
+        );
     }
 
     /// The user's real Open Notebook already has a `bge-m3` model bound to a
@@ -1246,10 +1427,20 @@ mod tests {
             let mut s = state.lock().unwrap();
             s.next_id += 1;
             let cred_id = format!("credential:{}", s.next_id);
-            s.credentials.push((cred_id.clone(), "http://127.0.0.1:9999/v1".to_string(), "openai_compatible".to_string(), "hand-made".to_string()));
+            s.credentials.push((
+                cred_id.clone(),
+                "http://127.0.0.1:9999/v1".to_string(),
+                "openai_compatible".to_string(),
+                "hand-made".to_string(),
+            ));
             s.next_id += 1;
             let model_id = format!("model:{}", s.next_id);
-            s.models.push((model_id.clone(), "bge-m3".to_string(), "openai_compatible".to_string(), cred_id.clone()));
+            s.models.push((
+                model_id.clone(),
+                "bge-m3".to_string(),
+                "openai_compatible".to_string(),
+                cred_id.clone(),
+            ));
             s.default_embedding_model = Some(model_id.clone());
             (cred_id, model_id)
         };
@@ -1258,24 +1449,58 @@ mod tests {
         assert!(changed);
 
         let s = state.lock().unwrap();
-        assert_eq!(s.credentials.len(), 2, "our credential is new, the old one is untouched");
-        assert_eq!(s.models.len(), 2, "our model is new, the old bge-m3 is untouched");
+        assert_eq!(
+            s.credentials.len(),
+            2,
+            "our credential is new, the old one is untouched"
+        );
+        assert_eq!(
+            s.models.len(),
+            2,
+            "our model is new, the old bge-m3 is untouched"
+        );
 
         // The old model/credential pair is exactly as it was.
-        assert!(s.credentials.iter().any(|(id, url, _, _)| id == &other_cred_id && url == "http://127.0.0.1:9999/v1"));
-        assert!(s.models.iter().any(|(id, name, _, cred)| id == &other_model_id && name == "bge-m3" && cred == &other_cred_id));
+        assert!(
+            s.credentials
+                .iter()
+                .any(|(id, url, _, _)| id == &other_cred_id && url == "http://127.0.0.1:9999/v1")
+        );
+        assert!(
+            s.models
+                .iter()
+                .any(|(id, name, _, cred)| id == &other_model_id
+                    && name == "bge-m3"
+                    && cred == &other_cred_id)
+        );
 
         // Our new model is bound to our credential, distinctly named (not
         // exactly "bge-m3", since that name is taken), and is now default.
-        let our_cred_id = s.credentials.iter().find(|(_, url, _, _)| url == embed_url).unwrap().0.clone();
-        let our_model = s.models.iter().find(|(_, _, _, cred)| cred == &our_cred_id).unwrap();
+        let our_cred_id = s
+            .credentials
+            .iter()
+            .find(|(_, url, _, _)| url == embed_url)
+            .unwrap()
+            .0
+            .clone();
+        let our_model = s
+            .models
+            .iter()
+            .find(|(_, _, _, cred)| cred == &our_cred_id)
+            .unwrap();
         assert_ne!(our_model.0, other_model_id);
         assert_ne!(our_model.1, "bge-m3");
         assert!(our_model.1.starts_with("bge-m3"), "name: {}", our_model.1);
-        assert_eq!(s.default_embedding_model.as_deref(), Some(our_model.0.as_str()));
+        assert_eq!(
+            s.default_embedding_model.as_deref(),
+            Some(our_model.0.as_str())
+        );
         drop(s);
 
-        assert_eq!(OpenNotebook::status(&base_url, embed_url, None), Status::Connected);
+        assert_eq!(
+            OpenNotebook::status(&base_url, embed_url, None),
+            Status::Connected
+        );
 
         // Second connect creates nothing new at all.
         let changed = OpenNotebook::connect(&base_url, embed_url, None).unwrap();
@@ -1301,23 +1526,41 @@ mod tests {
             let mut s = state.lock().unwrap();
             s.next_id += 1;
             let other_id = format!("credential:{}", s.next_id);
-            s.credentials.push((other_id.clone(), embed_url.to_string(), "openai_compatible".to_string(), "llama-server-local".to_string()));
+            s.credentials.push((
+                other_id.clone(),
+                embed_url.to_string(),
+                "openai_compatible".to_string(),
+                "llama-server-local".to_string(),
+            ));
             s.next_id += 1;
             let model_id = format!("model:{}", s.next_id);
-            s.models.push((model_id.clone(), "bge-m3".to_string(), "openai_compatible".to_string(), other_id));
+            s.models.push((
+                model_id.clone(),
+                "bge-m3".to_string(),
+                "openai_compatible".to_string(),
+                other_id,
+            ));
             model_id
         };
 
         // Refused while our model is the default: deleting it would leave
         // the default dangling and break every embedding job.
         assert!(OpenNotebook::disconnect(&base_url, embed_url, None).is_err());
-        assert_eq!(state.lock().unwrap().credentials.len(), 2, "refusal writes nothing");
+        assert_eq!(
+            state.lock().unwrap().credentials.len(),
+            2,
+            "refusal writes nothing"
+        );
 
         state.lock().unwrap().default_embedding_model = Some(other_model.clone());
         assert!(OpenNotebook::disconnect(&base_url, embed_url, None).unwrap());
 
         let s = state.lock().unwrap();
-        assert_eq!(s.credentials.len(), 1, "only the hand-made credential remains");
+        assert_eq!(
+            s.credentials.len(),
+            1,
+            "only the hand-made credential remains"
+        );
         assert_eq!(s.credentials[0].3, "llama-server-local");
         assert_eq!(s.models.len(), 1, "only our model was cascade-deleted");
         assert_eq!(s.models[0].0, other_model);
@@ -1364,11 +1607,17 @@ mod owui_tests {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
             == Some(expected);
-        if ok { Ok(()) } else { Err(StatusCode::UNAUTHORIZED) }
+        if ok {
+            Ok(())
+        } else {
+            Err(StatusCode::UNAUTHORIZED)
+        }
     }
 
     async fn config() -> Json<Value> {
-        Json(serde_json::json!({"status": true, "name": "Open WebUI", "default_locale": "en-US", "features": {}}))
+        Json(
+            serde_json::json!({"status": true, "name": "Open WebUI", "default_locale": "en-US", "features": {}}),
+        )
     }
 
     /// A generic server's `/api/config` (or whatever unrelated endpoint) -
@@ -1377,7 +1626,10 @@ mod owui_tests {
         Json(serde_json::json!({"status": true}))
     }
 
-    async fn get_embedding(State(state): State<Shared>, headers: HeaderMap) -> Result<Json<Value>, StatusCode> {
+    async fn get_embedding(
+        State(state): State<Shared>,
+        headers: HeaderMap,
+    ) -> Result<Json<Value>, StatusCode> {
         check_auth(&state, &headers)?;
         let s = state.lock().unwrap();
         Ok(Json(serde_json::json!({
@@ -1400,8 +1652,14 @@ mod owui_tests {
     ) -> Result<Json<Value>, StatusCode> {
         check_auth(&state, &headers)?;
         let mut s = state.lock().unwrap();
-        s.engine = body["RAG_EMBEDDING_ENGINE"].as_str().unwrap_or_default().to_string();
-        s.model = body["RAG_EMBEDDING_MODEL"].as_str().unwrap_or_default().to_string();
+        s.engine = body["RAG_EMBEDDING_ENGINE"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        s.model = body["RAG_EMBEDDING_MODEL"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         s.openai_url = body["openai_config"]["url"].as_str().map(str::to_string);
         s.openai_key = body["openai_config"]["key"].as_str().map(str::to_string);
         s.batch_size = body["RAG_EMBEDDING_BATCH_SIZE"].as_i64();
@@ -1427,7 +1685,10 @@ mod owui_tests {
                 let app = Router::new()
                     .route("/api/config", get(config))
                     .route("/api/v1/retrieval/embedding", get(get_embedding))
-                    .route("/api/v1/retrieval/embedding/update", axum::routing::post(update_embedding))
+                    .route(
+                        "/api/v1/retrieval/embedding/update",
+                        axum::routing::post(update_embedding),
+                    )
                     .with_state(app_state);
                 axum::serve(listener, app).await.unwrap();
             });
@@ -1457,7 +1718,10 @@ mod owui_tests {
     fn detect_matches_fingerprint_and_rejects_generic_server() {
         let (base_url, _state) = spawn_fake_server(None);
         assert!(OpenWebUi::detect(&base_url));
-        assert!(!OpenWebUi::detect(&spawn_generic_server()), "a /api/config without default_locale must not match");
+        assert!(
+            !OpenWebUi::detect(&spawn_generic_server()),
+            "a /api/config without default_locale must not match"
+        );
         assert!(!OpenWebUi::detect("http://127.0.0.1:1")); // nothing listening
     }
 
@@ -1465,7 +1729,10 @@ mod owui_tests {
     fn needs_key_without_admin_key() {
         let (base_url, _state) = spawn_fake_server(Some("adminkey"));
         let embed_url = "http://127.0.0.1:11435/v1";
-        assert_eq!(OpenWebUi::status(&base_url, embed_url, None), Status::NeedsKey);
+        assert_eq!(
+            OpenWebUi::status(&base_url, embed_url, None),
+            Status::NeedsKey
+        );
         assert!(OpenWebUi::connect(&base_url, embed_url, None).is_err());
     }
 
@@ -1474,7 +1741,10 @@ mod owui_tests {
         let (base_url, state) = spawn_fake_server(Some("adminkey"));
         let embed_url = "http://127.0.0.1:11435/v1";
 
-        assert_eq!(OpenWebUi::status(&base_url, embed_url, Some("adminkey")), Status::Found);
+        assert_eq!(
+            OpenWebUi::status(&base_url, embed_url, Some("adminkey")),
+            Status::Found
+        );
 
         let changed = OpenWebUi::connect(&base_url, embed_url, Some("adminkey")).unwrap();
         assert!(changed, "first connect must write the embedding config");
@@ -1484,7 +1754,10 @@ mod owui_tests {
             assert_eq!(s.model, "bge-m3");
             assert_eq!(s.openai_url.as_deref(), Some(embed_url));
         }
-        assert_eq!(OpenWebUi::status(&base_url, embed_url, Some("adminkey")), Status::Connected);
+        assert_eq!(
+            OpenWebUi::status(&base_url, embed_url, Some("adminkey")),
+            Status::Connected
+        );
 
         // Second connect must not write anything and must report no change.
         let changed = OpenWebUi::connect(&base_url, embed_url, Some("adminkey")).unwrap();
@@ -1503,10 +1776,16 @@ mod owui_tests {
         assert!(OpenWebUi::disconnect(&base_url, embed_url, Some("adminkey")).unwrap());
         {
             let s = state.lock().unwrap();
-            assert_eq!(s.engine, "", "reverted to Open WebUI's own built-in default");
+            assert_eq!(
+                s.engine, "",
+                "reverted to Open WebUI's own built-in default"
+            );
             assert_eq!(s.openai_url.as_deref(), Some(""));
         }
-        assert_eq!(OpenWebUi::status(&base_url, embed_url, Some("adminkey")), Status::Found);
+        assert_eq!(
+            OpenWebUi::status(&base_url, embed_url, Some("adminkey")),
+            Status::Found
+        );
 
         // Second disconnect is a no-op (already reverted).
         assert!(!OpenWebUi::disconnect(&base_url, embed_url, Some("adminkey")).unwrap());
@@ -1554,7 +1833,11 @@ mod anythingllm_tests {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
             == Some(expected);
-        if ok { Ok(()) } else { Err(StatusCode::FORBIDDEN) }
+        if ok {
+            Ok(())
+        } else {
+            Err(StatusCode::FORBIDDEN)
+        }
     }
 
     async fn ping() -> Json<Value> {
@@ -1567,7 +1850,10 @@ mod anythingllm_tests {
         Json(serde_json::json!({"ok": true}))
     }
 
-    async fn get_system(State(state): State<Shared>, headers: HeaderMap) -> Result<Json<Value>, StatusCode> {
+    async fn get_system(
+        State(state): State<Shared>,
+        headers: HeaderMap,
+    ) -> Result<Json<Value>, StatusCode> {
         check_auth(&state, &headers)?;
         let s = state.lock().unwrap();
         Ok(Json(serde_json::json!({
@@ -1616,7 +1902,10 @@ mod anythingllm_tests {
         spawn_fake_server_with(dev_key, None)
     }
 
-    fn spawn_fake_server_with(dev_key: Option<&'static str>, reject_base_path_with: Option<&'static str>) -> (String, Shared) {
+    fn spawn_fake_server_with(
+        dev_key: Option<&'static str>,
+        reject_base_path_with: Option<&'static str>,
+    ) -> (String, Shared) {
         let mut init = FakeState::default();
         init.dev_key = dev_key;
         init.reject_base_path_with = reject_base_path_with;
@@ -1664,7 +1953,10 @@ mod anythingllm_tests {
     fn detect_matches_fingerprint_and_rejects_generic_server() {
         let (base_url, _state) = spawn_fake_server(None);
         assert!(AnythingLlm::detect(&base_url));
-        assert!(!AnythingLlm::detect(&spawn_generic_server()), "a /api/ping with a different body must not match");
+        assert!(
+            !AnythingLlm::detect(&spawn_generic_server()),
+            "a /api/ping with a different body must not match"
+        );
         assert!(!AnythingLlm::detect("http://127.0.0.1:1")); // nothing listening
     }
 
@@ -1672,7 +1964,10 @@ mod anythingllm_tests {
     fn needs_key_without_dev_key() {
         let (base_url, _state) = spawn_fake_server(Some("devkey"));
         let embed_url = "http://127.0.0.1:11435/v1";
-        assert_eq!(AnythingLlm::status(&base_url, embed_url, None), Status::NeedsKey);
+        assert_eq!(
+            AnythingLlm::status(&base_url, embed_url, None),
+            Status::NeedsKey
+        );
         assert!(AnythingLlm::connect(&base_url, embed_url, None, false).is_err());
     }
 
@@ -1685,13 +1980,19 @@ mod anythingllm_tests {
         let embed_url = "http://127.0.0.1:11435/v1";
 
         let plan = AnythingLlm::plan(&base_url, embed_url, Some("devkey")).unwrap();
-        assert!(plan.triggers_reset, "fresh server has no engine set, so engine must change");
+        assert!(
+            plan.triggers_reset,
+            "fresh server has no engine set, so engine must change"
+        );
 
         let outcome = AnythingLlm::connect(&base_url, embed_url, Some("devkey"), false).unwrap();
         assert_eq!(outcome, ConnectOutcome::NeedsResetConfirmation);
 
         let s = state.lock().unwrap();
-        assert_eq!(s.write_calls, 0, "must not write anything before confirmation");
+        assert_eq!(
+            s.write_calls, 0,
+            "must not write anything before confirmation"
+        );
         assert_eq!(s.engine, "");
         assert_eq!(s.base_path, "");
     }
@@ -1703,7 +2004,10 @@ mod anythingllm_tests {
         let (base_url, state) = spawn_fake_server(Some("devkey"));
         let embed_url = "http://127.0.0.1:11435/v1";
 
-        assert_eq!(AnythingLlm::status(&base_url, embed_url, Some("devkey")), Status::Found);
+        assert_eq!(
+            AnythingLlm::status(&base_url, embed_url, Some("devkey")),
+            Status::Found
+        );
 
         let outcome = AnythingLlm::connect(&base_url, embed_url, Some("devkey"), true).unwrap();
         assert_eq!(outcome, ConnectOutcome::Done(true));
@@ -1714,7 +2018,10 @@ mod anythingllm_tests {
             assert_eq!(s.model_pref, "bge-m3");
             assert_eq!(s.max_chunk_length, "8192");
         }
-        assert_eq!(AnythingLlm::status(&base_url, embed_url, Some("devkey")), Status::Connected);
+        assert_eq!(
+            AnythingLlm::status(&base_url, embed_url, Some("devkey")),
+            Status::Connected
+        );
 
         // Second connect must not write anything and must report no change -
         // no confirmation needed since nothing would change.
@@ -1741,10 +2048,15 @@ mod anythingllm_tests {
 
         let plan = AnythingLlm::plan(&base_url, new_embed_url, Some("devkey")).unwrap();
         assert!(!plan.triggers_reset);
-        assert_eq!(plan.writes.len(), 1, "only EmbeddingBasePath should need writing");
+        assert_eq!(
+            plan.writes.len(),
+            1,
+            "only EmbeddingBasePath should need writing"
+        );
         assert_eq!(plan.writes[0].key, "EmbeddingBasePath");
 
-        let outcome = AnythingLlm::connect(&base_url, new_embed_url, Some("devkey"), false).unwrap();
+        let outcome =
+            AnythingLlm::connect(&base_url, new_embed_url, Some("devkey"), false).unwrap();
         assert_eq!(outcome, ConnectOutcome::Done(true));
         let s = state.lock().unwrap();
         assert_eq!(s.write_calls, 1, "must write exactly one key");
@@ -1759,14 +2071,22 @@ mod anythingllm_tests {
     /// stop before ever reaching the reset-triggering keys.
     #[test]
     fn base_path_validation_error_is_surfaced_and_stops_before_reset() {
-        let (base_url, state) =
-            spawn_fake_server_with(Some("devkey"), Some("Port is not running a reachable service on loopback"));
+        let (base_url, state) = spawn_fake_server_with(
+            Some("devkey"),
+            Some("Port is not running a reachable service on loopback"),
+        );
         let embed_url = "http://127.0.0.1:11435/v1";
 
         let err = AnythingLlm::connect(&base_url, embed_url, Some("devkey"), true).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("loopback"), "original AnythingLLM message must be preserved: {msg}");
-        assert!(msg.contains("Runs in Docker"), "must hint at the Docker toggle: {msg}");
+        assert!(
+            msg.contains("loopback"),
+            "original AnythingLLM message must be preserved: {msg}"
+        );
+        assert!(
+            msg.contains("Runs in Docker"),
+            "must hint at the Docker toggle: {msg}"
+        );
 
         let s = state.lock().unwrap();
         assert_eq!(s.write_calls, 1, "must stop at the first failing write");
@@ -1791,14 +2111,21 @@ mod anythingllm_tests {
             AnythingLlm::disconnect(&base_url, embed_url, Some("devkey"), false).unwrap(),
             ConnectOutcome::NeedsResetConfirmation
         );
-        assert_eq!(state.lock().unwrap().engine, "generic-openai", "unconfirmed disconnect writes nothing");
+        assert_eq!(
+            state.lock().unwrap().engine,
+            "generic-openai",
+            "unconfirmed disconnect writes nothing"
+        );
 
         assert_eq!(
             AnythingLlm::disconnect(&base_url, embed_url, Some("devkey"), true).unwrap(),
             ConnectOutcome::Done(true)
         );
         assert_eq!(state.lock().unwrap().engine, "native");
-        assert_eq!(AnythingLlm::status(&base_url, embed_url, Some("devkey")), Status::Found);
+        assert_eq!(
+            AnythingLlm::status(&base_url, embed_url, Some("devkey")),
+            Status::Found
+        );
 
         // Second disconnect is a no-op (already reverted).
         assert_eq!(
@@ -1819,8 +2146,12 @@ mod smoke {
     #[ignore]
     fn smoke_real_open_notebook_status() {
         let on = std::env::var("BGE_SMOKE_ON").unwrap_or_else(|_| "http://127.0.0.1:5055".into());
-        let embed = std::env::var("BGE_SMOKE_EMBED").unwrap_or_else(|_| "http://127.0.0.1:11435/v1".into());
+        let embed =
+            std::env::var("BGE_SMOKE_EMBED").unwrap_or_else(|_| "http://127.0.0.1:11435/v1".into());
         println!("detect({on}) = {}", OpenNotebook::detect(&on));
-        println!("status({on}, {embed}) = {:?}", OpenNotebook::status(&on, &embed, None));
+        println!(
+            "status({on}, {embed}) = {:?}",
+            OpenNotebook::status(&on, &embed, None)
+        );
     }
 }

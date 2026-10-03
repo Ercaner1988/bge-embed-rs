@@ -21,20 +21,22 @@
 // behaves like the original CLI-only server.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-use anyhow::{anyhow, Error as E, Result};
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
+use anyhow::{Error as E, Result, anyhow};
+use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
 use candle_core::{DType, Device, IndexOp, Tensor};
-use candle_nn::{embedding, layer_norm, Embedding, LayerNorm, Module, VarBuilder};
+use candle_nn::{Embedding, LayerNorm, Module, VarBuilder, embedding, layer_norm};
 use candle_transformers::models::bert::{BertEncoder, Config, DTYPE};
-use hf_hub::{api::tokio::Api, Cache, Repo, RepoType};
+use hf_hub::{Cache, Repo, RepoType, api::tokio::Api};
 use serde::{Deserialize, Serialize};
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use tokenizers::{Tokenizer, TruncationParams};
 
-use bge_settings::{effective_host, effective_model, effective_parallel, effective_port, Phase, Status};
+use bge_settings::{
+    Phase, Status, effective_host, effective_model, effective_parallel, effective_port,
+};
 
 /// Reports hf-hub download progress into `Status`. hf-hub 0.4's tokio API
 /// (`ApiRepo::download_with_progress`, src/api/tokio.rs) drives this trait
@@ -91,14 +93,18 @@ impl EmbedModel {
         if let Some(path) = cache.repo(cache_repo_id.clone()).get(filename) {
             return Ok(path);
         }
-        let progress = StatusProgress { status: status.clone() };
+        let progress = StatusProgress {
+            status: status.clone(),
+        };
         Ok(repo.download_with_progress(filename, progress).await?)
     }
 
     async fn load(status: Arc<Status>) -> Result<Self> {
         let device = Device::Cpu;
         let model_name = effective_model();
-        println!("Loading {model_name} (downloaded from the Hugging Face hub on first run if not cached)...");
+        println!(
+            "Loading {model_name} (downloaded from the Hugging Face hub on first run if not cached)..."
+        );
         let api = Api::new()?;
         let repo_id = Repo::new(model_name, RepoType::Model);
         let repo = api.repo(repo_id.clone());
@@ -107,10 +113,12 @@ impl EmbedModel {
         let cache = Cache::default();
 
         let config_path = Self::fetch(&repo, &cache, &repo_id, "config.json", &status).await?;
-        let tokenizer_path = Self::fetch(&repo, &cache, &repo_id, "tokenizer.json", &status).await?;
+        let tokenizer_path =
+            Self::fetch(&repo, &cache, &repo_id, "tokenizer.json", &status).await?;
         // Assumes the repo ships pytorch_model.bin (true for BAAI/bge-m3);
         // a safetensors-only alternate model repo would fail to fetch here.
-        let weights_path = Self::fetch(&repo, &cache, &repo_id, "pytorch_model.bin", &status).await?;
+        let weights_path =
+            Self::fetch(&repo, &cache, &repo_id, "pytorch_model.bin", &status).await?;
         status.set_phase(Phase::Loading);
 
         let config: Config = serde_json::from_str(&std::fs::read_to_string(config_path)?)?;
@@ -202,11 +210,13 @@ fn load_tokenizer(path: &std::path::Path, max_tokens: usize) -> Result<Tokenizer
 fn get_extended_attention_mask(attention_mask: &Tensor, dtype: DType) -> Result<Tensor> {
     let attention_mask = attention_mask.unsqueeze(1)?.unsqueeze(1)?;
     let attention_mask = attention_mask.to_dtype(dtype)?;
-    Ok((attention_mask.ones_like()? - &attention_mask)?.broadcast_mul(
-        &Tensor::try_from(f32::MIN)?
-            .to_device(attention_mask.device())?
-            .to_dtype(dtype)?,
-    )?)
+    Ok(
+        (attention_mask.ones_like()? - &attention_mask)?.broadcast_mul(
+            &Tensor::try_from(f32::MIN)?
+                .to_device(attention_mask.device())?
+                .to_dtype(dtype)?,
+        )?,
+    )
 }
 
 fn normalize_l2(v: &Tensor) -> Result<Tensor> {
@@ -246,7 +256,10 @@ where
             .collect();
         handles
             .into_iter()
-            .map(|h| h.join().unwrap_or_else(|_| Err(anyhow!("embedding thread panicked"))))
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| Err(anyhow!("embedding thread panicked")))
+            })
             .collect()
     });
     let mut all = Vec::with_capacity(inputs.len());
@@ -391,7 +404,10 @@ async fn run_server(status: Arc<Status>) -> Result<()> {
     let app = Router::new()
         .route("/v1/embeddings", post(embeddings_handler))
         .route("/health", axum::routing::get(health))
-        .with_state(AppState { model, status: status.clone() });
+        .with_state(AppState {
+            model,
+            status: status.clone(),
+        });
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     println!("bge-embed-rs listening on {url}");
@@ -418,7 +434,8 @@ fn avx2_fma_available() -> bool {
     }
 }
 
-const AVX2_FMA_MISSING_MSG: &str = "this build needs a CPU with AVX2 and FMA (Intel 2013+, AMD 2015+)";
+const AVX2_FMA_MISSING_MSG: &str =
+    "this build needs a CPU with AVX2 and FMA (Intel 2013+, AMD 2015+)";
 
 fn main() -> Result<()> {
     let headless = headless_requested();
@@ -517,11 +534,17 @@ mod tests {
     // Skipped silently when bge-m3 is not in the local Hugging Face cache.
     #[test]
     fn truncates_to_model_limit() {
-        let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) else {
+        let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
+        else {
             return;
         };
-        let snaps = std::path::Path::new(&home).join(".cache/huggingface/hub/models--BAAI--bge-m3/snapshots");
-        let Some(dir) = std::fs::read_dir(snaps).ok().and_then(|mut d| d.next()).and_then(|e| e.ok()) else {
+        let snaps = std::path::Path::new(&home)
+            .join(".cache/huggingface/hub/models--BAAI--bge-m3/snapshots");
+        let Some(dir) = std::fs::read_dir(snaps)
+            .ok()
+            .and_then(|mut d| d.next())
+            .and_then(|e| e.ok())
+        else {
             return;
         };
         let path = dir.path().join("tokenizer.json");
@@ -530,14 +553,20 @@ mod tests {
         }
         let tok = load_tokenizer(&path, 8192).unwrap();
         let long = "kelime ".repeat(20_000);
-        assert_eq!(tok.encode(long.as_str(), true).unwrap().get_ids().len(), 8192);
+        assert_eq!(
+            tok.encode(long.as_str(), true).unwrap().get_ids().len(),
+            8192
+        );
         assert!(tok.encode("kisa metin", true).unwrap().get_ids().len() < 10);
     }
 
     #[test]
     fn kisa_serit_yalniz_tek_ve_kisa_girdi() {
         assert!(kisa_mi(&["kök neden bulma".to_string()]));
-        assert!(!kisa_mi(&["a".to_string(), "b".to_string()]), "iki girdi toplu sayılır");
+        assert!(
+            !kisa_mi(&["a".to_string(), "b".to_string()]),
+            "iki girdi toplu sayılır"
+        );
         assert!(!kisa_mi(&["ş".repeat(513)]), "uzun tek girdi toplu sayılır");
         assert!(!kisa_mi(&[]), "boş istek hızlı şeride girmez");
     }
@@ -546,9 +575,17 @@ mod tests {
     fn propagates_errors() {
         let inputs: Vec<String> = (0..10).map(|i| i.to_string()).collect();
         let r = embed_parallel(&inputs, 3, |t| {
-            if t == "5" { Err(anyhow!("boom")) } else { Ok(vec![0.0]) }
+            if t == "5" {
+                Err(anyhow!("boom"))
+            } else {
+                Ok(vec![0.0])
+            }
         });
         assert!(r.is_err());
-        assert!(embed_parallel(&[], 4, |_| Ok(vec![1.0])).unwrap().is_empty());
+        assert!(
+            embed_parallel(&[], 4, |_| Ok(vec![1.0]))
+                .unwrap()
+                .is_empty()
+        );
     }
 }

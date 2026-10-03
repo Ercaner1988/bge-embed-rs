@@ -1,8 +1,8 @@
 // Per-user settings (env > saved file > default) and the Phase/Status the server
 // publishes for the window. No dependencies: the server and the GUI both build on it.
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Mutex,
+    atomic::{AtomicU64, Ordering},
 };
 
 /// Server defaults, also read back by the Settings/Status screens (`gui.rs`)
@@ -121,7 +121,8 @@ impl Status {
 
     pub fn record_request(&self, texts: usize, latency_ms: u64) {
         self.requests_served.fetch_add(1, Ordering::Relaxed);
-        self.texts_embedded.fetch_add(texts as u64, Ordering::Relaxed);
+        self.texts_embedded
+            .fetch_add(texts as u64, Ordering::Relaxed);
         self.last_latency_ms.store(latency_ms, Ordering::Relaxed);
     }
 }

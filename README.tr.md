@@ -116,6 +116,8 @@ cargo build --release
 
 `.cargo/config.toml`, `x86_64` derlemeleri için `target-cpu=x86-64-v3`'ü otomatik ayarlar: candle'ın eleman bazlı işlemleri yalnız derleme hedefinin izin verdiği SIMD komutlarını kullanır ve SSE2 tabanlı bir derleme yaklaşık 10 kat yavaştı.
 
+İsteğe bağlı: `cargo build --release --features fihrist`, Tema menüsüne [el-Fihrist](https://github.com/Ercaner1988/el-Fihrist)'in tema kataloğunu ekler. Katalog yalnız bu menü açıkken okunur; seçilen paket diğer ayarların yanına kaydedilir, yerleşik tema yedek olarak kalır.
+
 ## Teşekkürler ve lisanslar
 
 Kod [MIT lisanslıdır](LICENSE).

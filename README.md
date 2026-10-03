@@ -116,6 +116,8 @@ cargo build --release
 
 `.cargo/config.toml` sets `target-cpu=x86-64-v3` for `x86_64` builds automatically: candle's element-wise operations only use the SIMD instructions the compile target allows, and an SSE2-baseline build was about 10x slower.
 
+Optional: `cargo build --release --features fihrist` adds [el-Fihrist](https://github.com/Ercaner1988/el-Fihrist)'s theme catalogue to the Theme menu. The catalogue is only read while that menu is open; the chosen pack is saved next to your other settings and the built-in theme stays the fallback.
+
 ## Credits & licenses
 
 Code is [MIT licensed](LICENSE).

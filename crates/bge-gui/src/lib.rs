@@ -303,6 +303,18 @@ impl eframe::App for GuiApp {
     }
 }
 
+/// With the `fihrist` feature the Theme menu also lists el-Fihrist's theme packs; the
+/// catalogue is only read while the menu is open and the chosen pack is saved locally.
+#[cfg(feature = "fihrist")]
+fn tema_menu(ui: &mut Ui, tercih: &mut kilim_tema::TemaTercihi) -> bool {
+    kilim_tema::tema_secici_kaynakli(ui, tercih, TEMA_ADI, &fihrist_tema::FihristTemalari::bul())
+}
+
+#[cfg(not(feature = "fihrist"))]
+fn tema_menu(ui: &mut Ui, tercih: &mut kilim_tema::TemaTercihi) -> bool {
+    kilim_tema::tema_secici(ui, tercih)
+}
+
 /// Header row: title/subtitle on the left, status pill on the right.
 fn header_row(
     ui: &mut Ui,
@@ -327,7 +339,7 @@ fn header_row(
             ));
         });
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if kilim_tema::tema_secici(ui, tercih) {
+            if tema_menu(ui, tercih) {
                 tercih.kaydet(TEMA_ADI);
                 theme::apply_visuals(ui.ctx());
             }

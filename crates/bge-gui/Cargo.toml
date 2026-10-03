@@ -12,6 +12,11 @@ bge-connectors.workspace = true
 bge-theme.workspace = true
 eframe.workspace = true
 kilim-tema.workspace = true
+fihrist-tema = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
+
+[features]
+# Tema menüsüne el-Fihrist kataloğunu ekler (fihrist-tema); kapalıyken yalnız yerleşik tema.
+fihrist = ["dep:fihrist-tema"]

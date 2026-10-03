@@ -13,7 +13,10 @@ bge-theme = { path = "crates/bge-theme" }
 bge-gui = { path = "crates/bge-gui" }
 # Ortak tema (Kilim paleti, Semerkant kâğıdı, kilim çerçeve). git + rev: kardeş
 # depo yolu klonlayan herkeste ve CI'da yok. Tema değişince rev'i güncelle.
-kilim-tema = { git = "https://github.com/Ercaner1988/kilim-tema", rev = "d1c8d2cbdcb4ace6ddbbd842a449ba9775d6fae8" }
+kilim-tema = { git = "https://github.com/Ercaner1988/kilim-tema", rev = "a62bfc71227202fe1173b8f9d36aaa723fd5a12c" }
+# Seçimlik tema kataloğu (el-Fihrist): tema yalnız kullanıcı Tema menüsünden değiştirirken
+# sorulur. Aynı kilim-tema rev'ini çeker; ikisi birlikte güncellenir.
+fihrist-tema = { git = "https://github.com/Ercaner1988/el-Fihrist", rev = "3f46861c008f38f1e5e07202d9d1ff0f2ed4f106" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -57,6 +60,10 @@ tokenizers = { version = "0.21", default-features = false, features = ["unstable
 hf-hub = { version = "0.4", features = ["tokio"] }
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
+
+[features]
+# Tema menüsüne el-Fihrist kataloğunu ekler; kapalıyken yalnız yerleşik tema var.
+fihrist = ["bge-gui/fihrist"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true

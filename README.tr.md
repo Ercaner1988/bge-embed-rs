@@ -55,7 +55,9 @@ Başlangıçta okunan ortam değişkenleri:
 |---|---|---|
 | `BGE_HOST` | `127.0.0.1` | `0.0.0.0` sunucuyu LAN'a/Docker'a açar — kimlik doğrulama yoktur, yalnızca güvendiğiniz bir ağda kullanın. |
 | `BGE_PORT` | `11435` | |
-| `BGE_PARALLEL` | `4` | Embedding işini yürüten iş parçacığı sayısı. |
+| `BGE_PARALLEL` | `4` | Aynı anda gömülen en fazla parti sayısı (her parti tüm çekirdeklere yayılan tek ileri geçiş). |
+| `BGE_PARTI_TOKEN` | `2048` | Parti başına en fazla dolgulu token (parti boyu x en uzun girdi). |
+| `BGE_PROFIL` | kapalı | `1`: her istek için zaman damgalı (UTC) satır basar: token, parti, tokenizer ms, ileri geçiş ms. |
 | `BGE_HEADLESS` | tanımsız | `1` pencereyi devre dışı bırakır. |
 
 ## Araçlara bağlanma

@@ -55,7 +55,9 @@ Environment variables read at startup:
 |---|---|---|
 | `BGE_HOST` | `127.0.0.1` | `0.0.0.0` exposes the server to your LAN/Docker — there is no authentication, only do this on a trusted network. |
 | `BGE_PORT` | `11435` | |
-| `BGE_PARALLEL` | `4` | Number of embedding worker threads. |
+| `BGE_PARALLEL` | `4` | Max batches embedded concurrently (each batch is one forward pass spread over all cores). |
+| `BGE_PARTI_TOKEN` | `2048` | Max padded tokens (batch size x longest input) per batch. |
+| `BGE_PROFIL` | off | `1` prints one timestamped (UTC) line per request: tokens, batches, tokenizer ms, forward ms. |
 | `BGE_HEADLESS` | unset | `1` skips the GUI window. |
 
 ## Connecting tools

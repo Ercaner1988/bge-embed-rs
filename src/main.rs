@@ -11,9 +11,10 @@
 //   position_id = 1-based index among non-pad tokens + pad_token_id
 // (see HF transformers create_position_ids_from_input_ids). Without the
 // offset cosine similarity to the reference stalls at ~0.90. BertModel's
-// embeddings field is private, so instead of forking the whole model we
-// rebuild only the embedding layer here with the right offset and reuse
-// candle_transformers' public BertEncoder unchanged.
+// embeddings field is private, so the embedding layer is rebuilt here with the
+// right offset. The encoder is also our own (Katman + src/hizli.rs): same BERT
+// math as candle_transformers' BertEncoder (verified cosine 1.000000 against it)
+// but batched with dynamic padding and with parallel/fused CPU kernels.
 //
 // GUI NOTE: double-clicking the binary opens the egui window from
 // design/DESIGN.md (crates/bge-theme + crates/bge-gui) while the server runs in a background
@@ -23,9 +24,9 @@
 
 use anyhow::{Error as E, Result, anyhow};
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
-use candle_core::{DType, Device, IndexOp, Tensor};
+use candle_core::{Device, IndexOp, Tensor};
 use candle_nn::{Embedding, LayerNorm, Module, VarBuilder, embedding, layer_norm};
-use candle_transformers::models::bert::{BertEncoder, Config, DTYPE};
+use candle_transformers::models::bert::{Config, DTYPE, HiddenAct};
 use hf_hub::{Cache, Repo, RepoType, api::tokio::Api};
 use serde::{Deserialize, Serialize};
 use std::sync::{
@@ -33,6 +34,9 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use tokenizers::{Tokenizer, TruncationParams};
+
+mod hizli;
+use hizli::{ArtikLn, BiasGelu, Dikkat, linear};
 
 use bge_settings::{
     Phase, Status, effective_host, effective_model, effective_parallel, effective_port,
@@ -66,13 +70,73 @@ impl hf_hub::api::tokio::Progress for StatusProgress {
     async fn finish(&mut self) {}
 }
 
+/// Bir transformer katmanı; ağırlıklar yüklemede bir kez düzleştirilir (Q/K/V tek matriste,
+/// bias ve LayerNorm vektörleri düz dilim) ki `hizli` çekirdekleri doğrudan kullansın.
+struct Katman {
+    qkv_w: Tensor,
+    qkv_b: Vec<f32>,
+    o_w: Tensor,
+    o_b: Vec<f32>,
+    ln1_w: Vec<f32>,
+    ln1_b: Vec<f32>,
+    i_w: Tensor,
+    i_b: Vec<f32>,
+    d_w: Tensor,
+    d_b: Vec<f32>,
+    ln2_w: Vec<f32>,
+    ln2_b: Vec<f32>,
+}
+
+impl Katman {
+    fn load(vb: VarBuilder, c: &Config) -> Result<Self> {
+        let (h, ara) = (c.hidden_size, c.intermediate_size);
+        let att = vb.pp("attention");
+        let (s, o) = (att.pp("self"), att.pp("output"));
+        let w = |vb: &VarBuilder, ad: &str, cikti: usize, girdi: usize| -> Result<Tensor> {
+            Ok(vb.pp(ad).get((cikti, girdi), "weight")?)
+        };
+        let v = |vb: &VarBuilder, ad: &str, n: usize, alan: &str| -> Result<Vec<f32>> {
+            Ok(vb.pp(ad).get(n, alan)?.to_vec1::<f32>()?)
+        };
+        let qkv_w = Tensor::cat(
+            &[
+                &w(&s, "query", h, h)?,
+                &w(&s, "key", h, h)?,
+                &w(&s, "value", h, h)?,
+            ],
+            0,
+        )?;
+        let mut qkv_b = Vec::with_capacity(3 * h);
+        for ad in ["query", "key", "value"] {
+            qkv_b.extend(v(&s, ad, h, "bias")?);
+        }
+        let (inter, cik) = (vb.pp("intermediate"), vb.pp("output"));
+        Ok(Self {
+            qkv_w,
+            qkv_b,
+            o_w: w(&o, "dense", h, h)?,
+            o_b: v(&o, "dense", h, "bias")?,
+            ln1_w: v(&o, "LayerNorm", h, "weight")?,
+            ln1_b: v(&o, "LayerNorm", h, "bias")?,
+            i_w: w(&inter, "dense", ara, h)?,
+            i_b: v(&inter, "dense", ara, "bias")?,
+            d_w: w(&cik, "dense", h, ara)?,
+            d_b: v(&cik, "dense", h, "bias")?,
+            ln2_w: v(&cik, "LayerNorm", h, "weight")?,
+            ln2_b: v(&cik, "LayerNorm", h, "bias")?,
+        })
+    }
+}
+
 struct EmbedModel {
     tokenizer: Tokenizer,
     word_embeddings: Embedding,
     position_embeddings: Embedding,
     token_type_embeddings: Embedding,
     embeddings_layer_norm: LayerNorm,
-    encoder: BertEncoder,
+    katmanlar: Vec<Katman>,
+    heads: usize,
+    ln_eps: f32,
     pad_token_id: u32,
     parallel: usize,
     device: Device,
@@ -147,7 +211,15 @@ impl EmbedModel {
             config.layer_norm_eps,
             embeddings_vb.pp("LayerNorm"),
         )?;
-        let encoder = BertEncoder::load(vb.pp("encoder"), &config)?;
+        if config.hidden_act != HiddenAct::Gelu {
+            return Err(anyhow!(
+                "yalnız hidden_act=gelu (erf) destekleniyor: {:?}",
+                config.hidden_act
+            ));
+        }
+        let katmanlar = (0..config.num_hidden_layers)
+            .map(|i| Katman::load(vb.pp(format!("encoder.layer.{i}")), &config))
+            .collect::<Result<Vec<_>>>()?;
 
         println!("Model loaded. hidden_size={}", config.hidden_size);
         Ok(Self {
@@ -156,43 +228,170 @@ impl EmbedModel {
             position_embeddings,
             token_type_embeddings,
             embeddings_layer_norm,
-            encoder,
+            katmanlar,
+            heads: config.num_attention_heads,
+            ln_eps: config.layer_norm_eps as f32,
             pad_token_id: config.pad_token_id as u32,
             parallel: effective_parallel(),
             device,
         })
     }
 
-    /// CLS pooling + L2 normalization (the recipe verified against the reference server).
-    fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
-        let encoding = self.tokenizer.encode(text, true).map_err(E::msg)?;
-        let ids = encoding.get_ids();
-        let input_ids = Tensor::new(ids, &self.device)?.unsqueeze(0)?;
+    /// Bir partiyi (sağdan 0-doldurulmuş, en uzun girdiye kadar) tek ileri geçişte gömer.
+    /// CLS pooling + L2 normalizasyonu (referans sunucuyla doğrulanan tarif). Doldurulan
+    /// anahtarlar dikkatten çıkarıldığından bir girdinin sonucu partiye bağlı değildir.
+    fn embed_batch(&self, ids: &[&[u32]]) -> Result<Vec<Vec<f32>>> {
+        let b = ids.len();
+        let uzun: Vec<usize> = ids.iter().map(|s| s.len()).collect();
+        let l = uzun.iter().copied().max().unwrap_or(0);
+        let pad = self.pad_token_id;
+        let mut tok = vec![pad; b * l];
+        let mut pos = vec![pad; b * l];
+        for (r, s) in ids.iter().enumerate() {
+            tok[r * l..r * l + s.len()].copy_from_slice(s);
+            for i in 0..s.len() {
+                pos[r * l + i] = i as u32 + 1 + pad;
+            }
+        }
+        let input_ids = Tensor::from_vec(tok, (b, l), &self.device)?;
+        let position_ids = Tensor::from_vec(pos, (b, l), &self.device)?;
         let token_type_ids = input_ids.zeros_like()?;
 
-        let seq_len = ids.len();
-        let position_ids: Vec<u32> = (0..seq_len as u32)
-            .map(|i| i + 1 + self.pad_token_id)
-            .collect();
-        let position_ids = Tensor::new(&position_ids[..], &self.device)?;
+        let embeddings = (&self.word_embeddings.forward(&input_ids)?
+            + self.token_type_embeddings.forward(&token_type_ids)?)?;
+        let embeddings = (embeddings + self.position_embeddings.forward(&position_ids)?)?;
+        let h = embeddings.dim(2)?;
+        let mut x = self
+            .embeddings_layer_norm
+            .forward(&embeddings)?
+            .reshape((b * l, h))?;
 
-        let input_embeddings = self.word_embeddings.forward(&input_ids)?;
-        let token_type_embeds = self.token_type_embeddings.forward(&token_type_ids)?;
-        let embeddings = (&input_embeddings + token_type_embeds)?;
-        let embeddings =
-            embeddings.broadcast_add(&self.position_embeddings.forward(&position_ids)?)?;
-        let embedding_output = self.embeddings_layer_norm.forward(&embeddings)?;
-
-        // A single sequence has no padding, so the extended mask is a no-op;
-        // the standard formula is kept for correctness.
-        let attention_mask = input_ids.ones_like()?;
-        let extended_mask = get_extended_attention_mask(&attention_mask, DTYPE)?;
-
-        let output = self.encoder.forward(&embedding_output, &extended_mask)?;
-        let cls = output.i((.., 0, ..))?;
-        let cls_norm = normalize_l2(&cls)?;
-        Ok(cls_norm.squeeze(0)?.to_vec1()?)
+        for k in &self.katmanlar {
+            let qkv = linear(&x, &k.qkv_w)?;
+            let baglam = qkv.apply_op1_no_bwd(&Dikkat {
+                bias: &k.qkv_b,
+                uzunluk: &uzun,
+                bas: self.heads,
+                bas_boyu: h / self.heads,
+                l,
+            })?;
+            let a = linear(&baglam, &k.o_w)?;
+            x = a.apply_op2_no_bwd(
+                &x,
+                &ArtikLn {
+                    bias: &k.o_b,
+                    agirlik: &k.ln1_w,
+                    kayma: &k.ln1_b,
+                    eps: self.ln_eps,
+                },
+            )?;
+            let ara = linear(&x, &k.i_w)?.apply_op1_no_bwd(&BiasGelu(&k.i_b))?;
+            let d = linear(&ara, &k.d_w)?;
+            x = d.apply_op2_no_bwd(
+                &x,
+                &ArtikLn {
+                    bias: &k.d_b,
+                    agirlik: &k.ln2_w,
+                    kayma: &k.ln2_b,
+                    eps: self.ln_eps,
+                },
+            )?;
+        }
+        let cls = x.reshape((b, l, h))?.i((.., 0, ..))?;
+        Ok(normalize_l2(&cls)?.to_vec2()?)
     }
+
+    /// Girdileri uzunluğa göre sıralayıp parti-parti gömer; sonuç girdi sırasındadır.
+    /// Parti en uzun üyesine doldurulduğundan benzer uzunlukları yan yana toplamak boşa
+    /// hesabı en aza indirir (eskiden her girdi tek tek, doldurmasız geçiyordu).
+    fn embed_many(&self, texts: &[String]) -> Result<(Vec<Vec<f32>>, Profil)> {
+        let t0 = std::time::Instant::now();
+        let enc: Vec<Vec<u32>> = texts
+            .iter()
+            .map(|t| {
+                let e = self.tokenizer.encode(t.as_str(), true).map_err(E::msg)?;
+                Ok(e.get_ids().to_vec())
+            })
+            .collect::<Result<_>>()?;
+        let tok_ms = t0.elapsed().as_millis() as u64;
+        let partiler = partile(&enc.iter().map(Vec::len).collect::<Vec<_>>());
+        let sonuc = embed_parallel(&partiler, self.parallel, |parti| {
+            let ids: Vec<&[u32]> = parti.iter().map(|&i| enc[i].as_slice()).collect();
+            self.embed_batch(&ids)
+        })?;
+        let mut out = vec![Vec::new(); texts.len()];
+        for (parti, vs) in partiler.iter().zip(sonuc) {
+            for (&i, v) in parti.iter().zip(vs) {
+                out[i] = v;
+            }
+        }
+        let profil = Profil {
+            token: enc.iter().map(Vec::len).sum(),
+            parti: partiler.len(),
+            tok_ms,
+            ileri_ms: t0.elapsed().as_millis() as u64 - tok_ms,
+        };
+        Ok((out, profil))
+    }
+}
+
+/// `BGE_PROFIL=1`: her istek için zaman damgalı bir satır (UTC) basılır.
+struct Profil {
+    token: usize,
+    parti: usize,
+    tok_ms: u64,
+    ileri_ms: u64,
+}
+
+static PROFIL_ACIK: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var("BGE_PROFIL").is_ok_and(|v| v == "1"));
+
+fn profil_yaz(girdi: usize, p: &Profil, toplam_ms: u64, serit: &str) {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() % 86_400_000);
+    println!(
+        "[{:02}:{:02}:{:02}.{:03} UTC] istek: {girdi} girdi, {} token, {} parti, {serit}; \
+         tokenizer {} ms, ileri geçiş {} ms, toplam {toplam_ms} ms",
+        ms / 3_600_000,
+        ms / 60_000 % 60,
+        ms / 1000 % 60,
+        ms % 1000,
+        p.token,
+        p.parti,
+        p.tok_ms,
+        p.ileri_ms
+    );
+}
+
+/// Parti başına doldurulmuş token üst sınırı (parti × en uzun girdi). Büyük parti gemm'i
+/// verimli yapar; sınır ara aktivasyonları (token × 4096 × 4 bayt) sınırlı tutar.
+fn parti_token_siniri() -> usize {
+    static N: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+        std::env::var("BGE_PARTI_TOKEN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&n: &usize| n >= 1)
+            .unwrap_or(2048)
+    });
+    *N
+}
+
+/// Uzunluklara göre indeks partileri: uzunluğa göre sıralanmış girdiler, doldurulmuş boyut
+/// (parti × en uzun) `parti_token_siniri`'nı aşmayacak kadar art arda toplanır.
+/// Tek girdi sınırı aşsa da kendi başına bir parti olur.
+fn partile(uzunluklar: &[usize]) -> Vec<Vec<usize>> {
+    let mut sira: Vec<usize> = (0..uzunluklar.len()).collect();
+    sira.sort_by_key(|&i| uzunluklar[i]);
+    let mut partiler: Vec<Vec<usize>> = Vec::new();
+    for i in sira {
+        match partiler.last_mut() {
+            // sıralı gidildiğinden i, partinin en uzunu olur
+            Some(p) if (p.len() + 1) * uzunluklar[i] <= parti_token_siniri() => p.push(i),
+            _ => partiler.push(vec![i]),
+        }
+    }
+    partiler
 }
 
 /// tokenizer.json defines no truncation; over-long input would overflow the position table. Truncates silently.
@@ -207,35 +406,23 @@ fn load_tokenizer(path: &std::path::Path, max_tokens: usize) -> Result<Tokenizer
     Ok(tokenizer)
 }
 
-fn get_extended_attention_mask(attention_mask: &Tensor, dtype: DType) -> Result<Tensor> {
-    let attention_mask = attention_mask.unsqueeze(1)?.unsqueeze(1)?;
-    let attention_mask = attention_mask.to_dtype(dtype)?;
-    Ok(
-        (attention_mask.ones_like()? - &attention_mask)?.broadcast_mul(
-            &Tensor::try_from(f32::MIN)?
-                .to_device(attention_mask.device())?
-                .to_dtype(dtype)?,
-        )?,
-    )
-}
-
 fn normalize_l2(v: &Tensor) -> Result<Tensor> {
     Ok(v.broadcast_div(&v.sqr()?.sum_keepdim(candle_core::D::Minus1)?.sqrt()?)?)
 }
 
 /// Embeds inputs on at most `parallel` threads; output keeps input order.
 /// On the first error the other workers stop taking new inputs and the error is returned.
-fn embed_parallel<F>(inputs: &[String], parallel: usize, f: F) -> Result<Vec<Vec<f32>>>
+fn embed_parallel<T: Sync, R: Send, F>(inputs: &[T], parallel: usize, f: F) -> Result<Vec<R>>
 where
-    F: Fn(&str) -> Result<Vec<f32>> + Sync,
+    F: Fn(&T) -> Result<R> + Sync,
 {
     let next = AtomicUsize::new(0);
     let failed = AtomicBool::new(false);
     let workers = parallel.min(inputs.len()).max(1);
-    let parts: Vec<Result<Vec<(usize, Vec<f32>)>>> = std::thread::scope(|s| {
+    let parts: Vec<Result<Vec<(usize, R)>>> = std::thread::scope(|s| {
         let handles: Vec<_> = (0..workers)
             .map(|_| {
-                s.spawn(|| -> Result<Vec<(usize, Vec<f32>)>> {
+                s.spawn(|| -> Result<Vec<(usize, R)>> {
                     let mut out = Vec::new();
                     while !failed.load(Ordering::Relaxed) {
                         let i = next.fetch_add(1, Ordering::Relaxed);
@@ -335,19 +522,23 @@ async fn embeddings_handler(
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         )
     };
-    // Sequential embedding keeps only ~3 cores busy on candle's CPU backend (non-matmul ops
-    // are single-threaded). Measured on an idle 6-core/12-thread Ryzen, 20 x ~1560-char
-    // chunks, s/chunk: BGE_PARALLEL 1=4.23 2=3.00 3=2.32 4=1.91 6=1.96 -> default 4.
-    let result = tokio::task::spawn_blocking(move || {
-        embed_parallel(&inputs, model.parallel, |text| model.embed_one(text))
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Girdiler uzunluğa göre partilenir (en fazla `BGE_PARALLEL` parti aynı anda); her parti
+    // tek ileri geçiştir ve rayon ile tüm çekirdeklere yayılır (bkz. hizli.rs).
+    let serit = if _izin.is_none() {
+        "hızlı şerit"
+    } else {
+        "toplu şerit"
+    };
+    let (result, profil) = tokio::task::spawn_blocking(move || model.embed_many(&inputs))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    state
-        .status
-        .record_request(text_count, started.elapsed().as_millis() as u64);
+    let toplam_ms = started.elapsed().as_millis() as u64;
+    state.status.record_request(text_count, toplam_ms);
+    if *PROFIL_ACIK {
+        profil_yaz(text_count, &profil, toplam_ms, serit);
+    }
 
     let data = result
         .into_iter()
@@ -572,6 +763,27 @@ mod tests {
     }
 
     #[test]
+    fn partile_siraya_gore_gruplar_ve_siniri_asmaz() {
+        let uz = [900usize, 5, 7, 1500, 6, 1000, 2500];
+        let p = partile(&uz);
+        let mut hepsi: Vec<usize> = p.iter().flatten().copied().collect();
+        hepsi.sort();
+        assert_eq!(
+            hepsi,
+            (0..uz.len()).collect::<Vec<_>>(),
+            "her girdi bir kez"
+        );
+        for parti in &p {
+            let en_uzun = parti.iter().map(|&i| uz[i]).max().unwrap();
+            assert!(
+                parti.len() == 1 || parti.len() * en_uzun <= parti_token_siniri(),
+                "dolgulu boyut sınırı aşıldı: {parti:?}"
+            );
+        }
+        assert!(partile(&[]).is_empty());
+    }
+
+    #[test]
     fn propagates_errors() {
         let inputs: Vec<String> = (0..10).map(|i| i.to_string()).collect();
         let r = embed_parallel(&inputs, 3, |t| {
@@ -583,7 +795,7 @@ mod tests {
         });
         assert!(r.is_err());
         assert!(
-            embed_parallel(&[], 4, |_| Ok(vec![1.0]))
+            embed_parallel(&[] as &[String], 4, |_| Ok(vec![1.0]))
                 .unwrap()
                 .is_empty()
         );

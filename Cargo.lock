@@ -501,6 +501,7 @@ dependencies = [
  "candle-transformers",
  "eframe",
  "hf-hub",
+ "rayon",
  "serde",
  "serde_json",
  "tokenizers",

@@ -496,8 +496,88 @@ struct EmbeddingResponse {
 /// axum handler state: the model plus the shared status counters it updates.
 #[derive(Clone)]
 struct AppState {
-    model: Arc<EmbedModel>,
+    model: Arc<Yuva>,
     status: Arc<Status>,
+}
+
+/// Sistem belleği bu yüzdeyi aşınca boştaki model bellekten atılır (f32 ağırlıklar ~2,3 GB).
+/// `BGE_BELLEK_ESIGI` (1-100) ile değişir; 100 yalnız bellek tümüyle dolunca boşaltır.
+fn bellek_esigi() -> u32 {
+    static N: std::sync::LazyLock<u32> = std::sync::LazyLock::new(|| {
+        std::env::var("BGE_BELLEK_ESIGI")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|n| (1..=100).contains(n))
+            .unwrap_or(90)
+    });
+    *N
+}
+/// Son istekten bu kadar sonra "boşta" sayılır.
+const BOSTA: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Model yuvası: bellek darken boşaltılır, ilk istekte yeniden yüklenir.
+struct Yuva {
+    model: std::sync::Mutex<Option<Arc<EmbedModel>>>,
+    yukleyici: Arc<tokio::sync::Mutex<()>>,
+    son_istek: std::sync::Mutex<std::time::Instant>,
+    status: Arc<Status>,
+}
+
+impl Yuva {
+    fn hazir(&self) -> Option<Arc<EmbedModel>> {
+        self.model.lock().unwrap().clone()
+    }
+
+    async fn al(self: &Arc<Self>) -> Result<Arc<EmbedModel>> {
+        *self.son_istek.lock().unwrap() = std::time::Instant::now();
+        if let Some(m) = self.hazir() {
+            return Ok(m);
+        }
+        let kilit = self.yukleyici.clone().lock_owned().await;
+        if let Some(m) = self.hazir() {
+            return Ok(m);
+        }
+        // Ayrı görevde: istemci vazgeçse de yükleme biter (kilit de onunla), ikinci yükleme olmaz.
+        let ben = self.clone();
+        tokio::spawn(async move {
+            let _kilit = kilit;
+            let evre = ben.status.phase.lock().unwrap().clone();
+            let m = Arc::new(EmbedModel::load(ben.status.clone()).await?);
+            if let Some(e) = evre {
+                ben.status.set_phase(e);
+            }
+            println!("model yeniden yüklendi");
+            *ben.model.lock().unwrap() = Some(m.clone());
+            Ok(m)
+        })
+        .await?
+    }
+
+    /// Bellek dar ve model boştaysa (hiçbir istek tutmuyor) bırakır; bıraktıysa yükü döner.
+    fn bosalt_gerekirse(&self) -> Option<u32> {
+        let yuk = bellek_yuku().filter(|&y| y >= bellek_esigi())?;
+        if self.son_istek.lock().unwrap().elapsed() < BOSTA {
+            return None;
+        }
+        let mut m = self.model.lock().unwrap();
+        // strong_count == 1: yalnız yuva tutuyor, uçuşta istek yok.
+        m.take_if(|m| Arc::strong_count(m) == 1).map(|_| yuk)
+    }
+}
+
+/// Sistem belleği yükü (%). Windows dışında ölçülmez: model hiç boşaltılmaz.
+fn bellek_yuku() -> Option<u32> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        // SAFETY: MEMORYSTATUSEX düz veri; sıfır geçerli, dwLength işlevin istediği gibi yazılır.
+        let mut d: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+        d.dwLength = size_of::<MEMORYSTATUSEX>() as u32;
+        // SAFETY: `d` bu çerçevede yaşayan, boyutu yazılmış yerel yapı.
+        (unsafe { GlobalMemoryStatusEx(&mut d) } != 0).then_some(d.dwMemoryLoad)
+    }
+    #[cfg(not(windows))]
+    None
 }
 
 async fn embeddings_handler(
@@ -507,7 +587,11 @@ async fn embeddings_handler(
     let inputs = req.input.into_vec();
     let text_count = inputs.len();
     let started = std::time::Instant::now();
-    let model = state.model.clone();
+    let model = state
+        .model
+        .al()
+        .await
+        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
     // Iki serit: tek ve kisa metinli istek (arama sorgusu) kapiyi atlar; toplu istekler
     // (Open Notebook) TOPLU_KAPI'dan birer birer gecer. Kapi yokken N eszamanli toplu istek
     // N*parallel is parcacigi aciyordu ve kisa sorgu CPU'dan 1/(N*parallel+1) pay aliyordu
@@ -585,7 +669,21 @@ async fn health() -> impl IntoResponse {
 /// Loads the model and serves the HTTP API. Identical in headless and GUI
 /// mode; only who calls it (main thread vs. a background thread) differs.
 async fn run_server(status: Arc<Status>) -> Result<()> {
-    let model = Arc::new(EmbedModel::load(status.clone()).await?);
+    let model = Arc::new(Yuva {
+        model: std::sync::Mutex::new(Some(Arc::new(EmbedModel::load(status.clone()).await?))),
+        yukleyici: Arc::default(),
+        son_istek: std::sync::Mutex::new(std::time::Instant::now()),
+        status: status.clone(),
+    });
+    let izleyici = model.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            if let Some(yuk) = izleyici.bosalt_gerekirse() {
+                println!("bellek %{yuk}: model bellekten atıldı, ilk istekte yüklenecek");
+            }
+        }
+    });
 
     let host = effective_host();
     let port = effective_port();

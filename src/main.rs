@@ -240,7 +240,7 @@ impl EmbedModel {
     /// Bir partiyi (sağdan 0-doldurulmuş, en uzun girdiye kadar) tek ileri geçişte gömer.
     /// CLS pooling + L2 normalizasyonu (referans sunucuyla doğrulanan tarif). Doldurulan
     /// anahtarlar dikkatten çıkarıldığından bir girdinin sonucu partiye bağlı değildir.
-    fn embed_batch(&self, ids: &[&[u32]]) -> Result<Vec<Vec<f32>>> {
+    fn embed_batch(&self, ids: &[&[u32]], toplu: bool) -> Result<Vec<Vec<f32>>> {
         let b = ids.len();
         let uzun: Vec<usize> = ids.iter().map(|s| s.len()).collect();
         let l = uzun.iter().copied().max().unwrap_or(0);
@@ -267,6 +267,9 @@ impl EmbedModel {
             .reshape((b * l, h))?;
 
         for k in &self.katmanlar {
+            if toplu {
+                hizliya_yol_ver();
+            }
             let qkv = linear(&x, &k.qkv_w)?;
             let baglam = qkv.apply_op1_no_bwd(&Dikkat {
                 bias: &k.qkv_b,
@@ -304,7 +307,7 @@ impl EmbedModel {
     /// Girdileri uzunluğa göre sıralayıp parti-parti gömer; sonuç girdi sırasındadır.
     /// Parti en uzun üyesine doldurulduğundan benzer uzunlukları yan yana toplamak boşa
     /// hesabı en aza indirir (eskiden her girdi tek tek, doldurmasız geçiyordu).
-    fn embed_many(&self, texts: &[String]) -> Result<(Vec<Vec<f32>>, Profil)> {
+    fn embed_many(&self, texts: &[String], toplu: bool) -> Result<(Vec<Vec<f32>>, Profil)> {
         let t0 = std::time::Instant::now();
         let enc: Vec<Vec<u32>> = texts
             .iter()
@@ -317,7 +320,7 @@ impl EmbedModel {
         let partiler = partile(&enc.iter().map(Vec::len).collect::<Vec<_>>());
         let sonuc = embed_parallel(&partiler, self.parallel, |parti| {
             let ids: Vec<&[u32]> = parti.iter().map(|&i| enc[i].as_slice()).collect();
-            self.embed_batch(&ids)
+            self.embed_batch(&ids, toplu)
         })?;
         let mut out = vec![Vec::new(); texts.len()];
         for (parti, vs) in partiler.iter().zip(sonuc) {
@@ -419,6 +422,11 @@ where
     let next = AtomicUsize::new(0);
     let failed = AtomicBool::new(false);
     let workers = parallel.min(inputs.len()).max(1);
+    // Tek iş çağıranın iş parçacığında: hızlı şeridin havuzu (`install`) ayrı bir std iş
+    // parçacığına geçince kaybolurdu (oradaki par_iter genel havuza düşer).
+    if workers == 1 {
+        return inputs.iter().map(&f).collect();
+    }
     let parts: Vec<Result<Vec<(usize, R)>>> = std::thread::scope(|s| {
         let handles: Vec<_> = (0..workers)
             .map(|_| {
@@ -613,10 +621,15 @@ async fn embeddings_handler(
     } else {
         "toplu şerit"
     };
-    let (result, profil) = tokio::task::spawn_blocking(move || model.embed_many(&inputs))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let hizli = _izin.is_none();
+    let _suren = hizli.then(HizliSuren::yeni);
+    let (result, profil) = tokio::task::spawn_blocking(move || match hizli {
+        true => HIZLI_HAVUZ.install(|| model.embed_many(&inputs, false)),
+        false => model.embed_many(&inputs, true),
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let toplam_ms = started.elapsed().as_millis() as u64;
     state.status.record_request(text_count, toplam_ms);
@@ -656,6 +669,61 @@ static TOPLU_KAPI: std::sync::LazyLock<tokio::sync::Semaphore> = std::sync::Lazy
     tokio::sync::Semaphore::new(izin)
 });
 const VARSAYILAN_TOPLU_IZIN: usize = 1;
+
+/// Hızlı şerit kapıyı atlamakla kalmaz, üç şeyle önce geçer (ölçüm 2026-10-05, 32×800
+/// belirteçlik toplu yük döngüsü altında 7 belirteçlik sorgu):
+/// - kendi rayon havuzu: genel havuzda sorgunun görevleri, toplu işin o an süren katmanının
+///   kuyruğa koyduğu görevlerin arkasında bekliyordu (katman ~2,7 sn);
+/// - havuz iş parçacıkları bir kademe yüksek öncelikli: süren katmanla çakışırken CPU payı;
+/// - toplu iş katman aralarında bekler (`hizliya_yol_ver`): sorgu da bütün ağırlıkları
+///   (2,3 GB) bellekten okur, bellek bant genişliğini öncelik paylaştırmaz.
+///
+/// Eski şerit 3-12 sn; yalnız bekleme 1,8-3 sn; bekleme + havuz 0,8-2,8 sn; üçü 0,12-0,32 sn.
+static HIZLI_HAVUZ: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .thread_name(|i| format!("hizli-serit-{i}"))
+        .start_handler(|_| oncelik_yukselt())
+        .build()
+        .expect("hızlı şerit havuzu kurulamadı")
+});
+
+/// Bu iş parçacığını süreç önceliğinin bir kademe üstüne alır (Windows; başka yerde etkisiz).
+fn oncelik_yukselt() {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+        };
+        // SAFETY: GetCurrentThread sözde tutamaç döndürür (kapatılmaz); yalnız bu iş parçacığı etkilenir.
+        if unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL) } == 0 {
+            eprintln!("hızlı şerit önceliği yükseltilemedi");
+        }
+    }
+}
+
+/// Uçuştaki hızlı şerit istekleri; toplu iş katman aralarında bunlar bitene dek bekler.
+static HIZLI_SUREN: AtomicUsize = AtomicUsize::new(0);
+
+struct HizliSuren;
+
+impl HizliSuren {
+    fn yeni() -> Self {
+        HIZLI_SUREN.fetch_add(1, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for HizliSuren {
+    fn drop(&mut self) {
+        HIZLI_SUREN.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn hizliya_yol_ver() {
+    while HIZLI_SUREN.load(Ordering::SeqCst) > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
 
 /// Hizli serit: tek girdi ve arama sorgusu boyunda (~512 karakter; tipik sorgu 20-80).
 fn kisa_mi(inputs: &[String]) -> bool {

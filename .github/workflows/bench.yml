@@ -33,7 +33,7 @@ jobs:
           BENCH_ROUNDS: "1"
           BENCH_BATCH: "4"
         run: |
-          ./target/release/bge-embed-rs --headless > server.log 2>&1 &
+          ./target/release/ibnun-nedim --headless > server.log 2>&1 &
           SERVER=$!
           trap 'echo "--- server.log"; cat server.log; kill $SERVER' EXIT
           for i in $(seq 1 120); do curl -sf http://127.0.0.1:11435/health && break; sleep 5; done
@@ -44,5 +44,5 @@ jobs:
         env:
           BENCH_SOURCE: book.txt
         run: |
-          echo "=== bun"; bun lane-bench.ts gated=./target/release/bge-embed-rs\|1 --throughput
-          echo "=== node"; node lane-bench.ts gated=./target/release/bge-embed-rs\|1 --throughput
+          echo "=== bun"; bun lane-bench.ts gated=./target/release/ibnun-nedim\|1 --throughput
+          echo "=== node"; node lane-bench.ts gated=./target/release/ibnun-nedim\|1 --throughput

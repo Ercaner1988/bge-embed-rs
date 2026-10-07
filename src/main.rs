@@ -767,7 +767,7 @@ async fn run_server(status: Arc<Status>) -> Result<()> {
         });
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    println!("bge-embed-rs listening on {url}");
+    println!("{} listening on {url}", bge_settings::APP_ID);
     status.set_phase(Phase::Ready { url });
     axum::serve(listener, app).await?;
     Ok(())
@@ -806,6 +806,12 @@ fn main() -> Result<()> {
                 windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
             );
         }
+    }
+
+    // Before anything reads settings or the theme: carry over what was saved
+    // under the old name (bge-embed-rs). Harmless once done.
+    for line in bge_settings::migrate_old_name() {
+        eprintln!("{line}");
     }
 
     let status = Arc::new(Status::default());
@@ -850,14 +856,14 @@ fn main() -> Result<()> {
         // to a black window on some Windows 11 + AMD/Intel-iGPU combinations).
         renderer: eframe::Renderer::Wgpu,
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("bge-embed-rs")
+            .with_title(bge_settings::DISPLAY_NAME)
             .with_inner_size([480.0, 560.0])
             .with_min_inner_size([480.0, 560.0])
             .with_transparent(false),
         ..Default::default()
     };
     eframe::run_native(
-        "bge-embed-rs",
+        bge_settings::APP_ID,
         native_options,
         Box::new(|cc| {
             bge_theme::apply(&cc.egui_ctx);

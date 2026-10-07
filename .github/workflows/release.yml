@@ -20,7 +20,7 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
       - run: cargo test --release --workspace
-      - run: cargo test --release --workspace --features bge-embed-rs/fihrist
+      - run: cargo test --release --workspace --features ibnun-nedim/fihrist
 
   build:
     needs: test
@@ -48,8 +48,8 @@ jobs:
         run: |
           ext=""; [[ "${{ matrix.target }}" == *windows* ]] && ext=".exe"
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/bge-embed-rs$ext" "dist/bge-embed-rs-${{ matrix.target }}$ext"
-          echo "BIN=dist/bge-embed-rs-${{ matrix.target }}$ext" >> "$GITHUB_ENV"
+          cp "target/${{ matrix.target }}/release/ibnun-nedim$ext" "dist/ibnun-nedim-${{ matrix.target }}$ext"
+          echo "BIN=dist/ibnun-nedim-${{ matrix.target }}$ext" >> "$GITHUB_ENV"
 
       - name: Cache model
         if: matrix.smoke && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')
@@ -81,7 +81,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: bge-embed-rs-${{ matrix.target }}
+          name: ibnun-nedim-${{ matrix.target }}
           path: dist/*
 
   release:

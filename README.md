@@ -1,4 +1,4 @@
-# bge-embed-rs
+# İbnü'n-Nedîm Gömme (`ibnun-nedim`)
 
 [Türkçe](README.tr.md)
 
@@ -6,16 +6,16 @@ A single-file, pure-Rust (candle) embedding server for [BAAI/bge-m3](https://hug
 
 ## Download
 
-Get the latest build from the [Releases page](https://github.com/Ercaner1988/bge-embed-rs/releases). `release.yml` builds these six assets per tag:
+Get the latest build from the [Releases page](https://github.com/Ercaner1988/ibnun-nedim/releases). `release.yml` builds these six assets per tag:
 
 | File | Platform |
 |---|---|
-| `bge-embed-rs-x86_64-pc-windows-msvc.exe` | Windows, x86-64 |
-| `bge-embed-rs-aarch64-pc-windows-msvc.exe` | Windows, ARM64 |
-| `bge-embed-rs-x86_64-unknown-linux-gnu` | Linux, x86-64 |
-| `bge-embed-rs-aarch64-unknown-linux-gnu` | Linux, ARM64 |
-| `bge-embed-rs-x86_64-apple-darwin` | macOS, Intel |
-| `bge-embed-rs-aarch64-apple-darwin` | macOS, Apple Silicon |
+| `ibnun-nedim-x86_64-pc-windows-msvc.exe` | Windows, x86-64 |
+| `ibnun-nedim-aarch64-pc-windows-msvc.exe` | Windows, ARM64 |
+| `ibnun-nedim-x86_64-unknown-linux-gnu` | Linux, x86-64 |
+| `ibnun-nedim-aarch64-unknown-linux-gnu` | Linux, ARM64 |
+| `ibnun-nedim-x86_64-apple-darwin` | macOS, Intel |
+| `ibnun-nedim-aarch64-apple-darwin` | macOS, Apple Silicon |
 
 The x86-64 builds are compiled for `x86-64-v3` (AVX2 + FMA + BMI — Intel Haswell 2013+, AMD Excavator/Zen 2015+). On an older CPU the app refuses to start and says so instead of crashing.
 
@@ -107,7 +107,7 @@ cost of about 27% batch throughput, measured with 3 concurrent clients over 3 ro
 To reproduce:
 
 ```bash
-BENCH_SOURCE=book.txt bun lane-bench.ts gated=./target/release/bge-embed-rs.exe|1 ungated=./target/release/bge-embed-rs.exe|999
+BENCH_SOURCE=book.txt bun lane-bench.ts gated=./target/release/ibnun-nedim.exe|1 ungated=./target/release/ibnun-nedim.exe|999
 ```
 
 ## Build from source

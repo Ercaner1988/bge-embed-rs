@@ -3,7 +3,7 @@ name = "bge-connectors"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "bge-embed-rs: connectors that point other tools at the embedding server"
+description = "ibnun-nedim: connectors that point other tools at the embedding server"
 repository.workspace = true
 
 [dependencies]

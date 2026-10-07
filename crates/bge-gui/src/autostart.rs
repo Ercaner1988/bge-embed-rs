@@ -15,8 +15,10 @@ mod imp {
 
     const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
     /// Value name under `RUN_KEY`; also doubles as the app's registry-visible
-    /// identity, so it must stay stable across releases.
-    const VALUE_NAME: &str = "bge-embed-rs";
+    /// identity, so it must stay stable across releases. A rename carries the
+    /// old value over (`migrate_old_name`).
+    const VALUE_NAME: &str = bge_settings::APP_ID;
+    const OLD_VALUE_NAME: &str = bge_settings::OLD_APP_ID;
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -38,10 +40,14 @@ mod imp {
     /// always rewrites the path, so flipping the toggle off then on again
     /// self-heals it.
     pub fn is_enabled() -> bool {
+        value_exists(VALUE_NAME)
+    }
+
+    fn value_exists(value: &str) -> bool {
         let Ok(hkey) = open(KEY_QUERY_VALUE) else {
             return false;
         };
-        let name = wide(VALUE_NAME);
+        let name = wide(value);
         let status = unsafe {
             RegQueryValueExW(
                 hkey,
@@ -92,6 +98,23 @@ mod imp {
         result
     }
 
+    /// A Run value left under the old name is rewritten under the new one
+    /// (pointing at this executable) and removed. `Ok(true)` if it moved.
+    pub fn migrate_old_name() -> io::Result<bool> {
+        if !value_exists(OLD_VALUE_NAME) {
+            return Ok(false);
+        }
+        set_enabled(true)?;
+        let hkey = open(KEY_SET_VALUE)?;
+        let name = wide(OLD_VALUE_NAME);
+        let status = unsafe { RegDeleteValueW(hkey, name.as_ptr()) };
+        unsafe { RegCloseKey(hkey) };
+        if status == ERROR_FILE_NOT_FOUND {
+            return Ok(true);
+        }
+        status_result(status).map(|()| true)
+    }
+
     fn status_result(status: u32) -> io::Result<()> {
         if status == ERROR_SUCCESS {
             Ok(())
@@ -139,6 +162,10 @@ mod imp {
             "start-on-login is only implemented on Windows",
         ))
     }
+
+    pub fn migrate_old_name() -> std::io::Result<bool> {
+        Ok(false)
+    }
 }
 
-pub use imp::{is_enabled, set_enabled};
+pub use imp::{is_enabled, migrate_old_name, set_enabled};

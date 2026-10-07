@@ -3,7 +3,7 @@ name = "bge-settings"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "bge-embed-rs: per-user settings, server Phase and Status"
+description = "ibnun-nedim: per-user settings, server Phase and Status"
 repository.workspace = true
 
 [dependencies]

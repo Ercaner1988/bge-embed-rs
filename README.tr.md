@@ -1,5 +1,9 @@
 # İbnü'n-Nedîm Gömme (`ibnun-nedim`)
 
+<p align="center"><img src="assets/ikon.png" alt="İbnü'n-Nedîm Gömme simgesi" width="256"></p>
+
+<p align="center"><sub>Simge: Ercan Er, Google Gemini ile üretti (2026-10).</sub></p>
+
 [English](README.md)
 
 [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) için tek dosyalık, saf Rust (candle) tabanlı bir embedding sunucusu. OpenAI uyumlu bir `/v1/embeddings` API'si ve küçük bir masaüstü penceresi sunar. Tamamen yerelde, CPU üzerinde çalışır. Python yok, Docker yok, harici bir çalışma zamanı yok.

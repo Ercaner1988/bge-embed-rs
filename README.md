@@ -1,5 +1,9 @@
 # İbnü'n-Nedîm Gömme (`ibnun-nedim`)
 
+<p align="center"><img src="assets/ikon.png" alt="İbnü'n-Nedîm Gömme icon" width="256"></p>
+
+<p align="center"><sub>Icon: made by Ercan Er with Google Gemini (2026-10).</sub></p>
+
 [Türkçe](README.tr.md)
 
 A single-file, pure-Rust (candle) embedding server for [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3), with an OpenAI-compatible `/v1/embeddings` API and a small desktop window. Runs fully locally, on CPU. No Python, no Docker, no external runtime.

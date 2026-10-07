@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/ikon.png" alt="İbnü'n-Nedîm Gömme icon" width="256"></p>
 
-<p align="center"><sub>Icon: made by Ercan Er with Google Gemini (2026-10); Arabic name «ابن النديم» set in Amiri (SIL Open Font License).</sub></p>
+<p align="center"><sub>Icon: made by Ercan Er with Google Gemini (2026-10); Arabic name «ابن النديم» set in Amiri (SIL Open Font License); the writing in the book comes from the Süleymaniye copy of <i>al-Fihrist</i> (Şehid Ali Paşa, no. 1934).</sub></p>
 
 [Türkçe](README.tr.md)
 
@@ -15,6 +15,10 @@ A single-file, pure-Rust (candle) embedding server for [BAAI/bge-m3](https://hug
 This server is named after Abu al-Faraj Muhammad ibn Abi Ya'qub Ishaq ibn Muhammad ibn Ishaq al-Nadim (d. 385/995 [?]). The TDV Encyclopedia of Islam entry [İbnü'n-Nedîm](https://islamansiklopedisi.org.tr/ibnun-nedim) introduces him as an Arab bibliographer, the author of *al-Fihrist*. Like his father he was a *warraq*: he learned the trade of copying, binding and selling books from his father, and through it came into contact with the scholarly, cultural and artistic circles of his time and got to know a great many books on many subjects.
 
 According to the same entry, *al-Fihrist*, written in 377 AH (987 CE), is the first bibliographic work of its kind in the Islamic world. It consists of ten parts called *maqala*, each divided into sections called *fann*. The names, subjects and authors of many works lost over time have reached us only through it.
+
+<p align="center"><img src="assets/el-fihrist-5-makale.png" alt="al-Fihrist, first page of the fifth maqala" width="260"></p>
+
+<p align="center"><sub>First page of the fifth <i>maqala</i> of Ibn al-Nadim's <i>al-Fihrist</i> (Süleymaniye Library, Şehid Ali Paşa, no. 1934). Image: TDV Encyclopedia of Islam, entry "İbnü'n-Nedîm".</sub></p>
 
 The name lands here because of a division of labour. [el-Fihrist](https://github.com/Ercaner1988/el-Fihrist) is the catalogue: it indexes skills, code and memory. To search a catalogue by meaning, every text first has to be read and its meaning turned into numbers, much as the warraq, who knew the books, decided where each belonged in the Fihrist. İbnü'n-Nedîm Gömme ("embedding") does that reading: it turns text into bge-m3 vectors, and the catalogue searches with them. The catalogue tool in el-Fihrist is also called `ibnunnedim` (the CLI) and takes its embeddings from this server; to keep them apart, one is the **CLI** and the other the **Gömme**.
 

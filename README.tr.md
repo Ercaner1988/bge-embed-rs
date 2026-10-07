@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/ikon.png" alt="İbnü'n-Nedîm Gömme simgesi" width="256"></p>
 
-<p align="center"><sub>Simge: Ercan Er, Google Gemini ile üretti (2026-10).</sub></p>
+<p align="center"><sub>Simge: Ercan Er, Google Gemini ile üretti (2026-10); Arapça ad «ابن النديم» Amiri yazı tipiyle (SIL Open Font License) dizildi.</sub></p>
 
 [English](README.md)
 

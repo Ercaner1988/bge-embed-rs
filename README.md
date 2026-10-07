@@ -33,7 +33,7 @@ Source: Nasuhi Ünal Karaarslan, "İbnü'n-Nedîm", *TDV İslâm Ansiklopedisi*,
 
 ## Download
 
-Get the latest build from the [Releases page](https://github.com/Ercaner1988/ibnun-nedim/releases). `release.yml` builds these six assets per tag:
+Get the latest build from the [Releases page](https://github.com/Ercaner1988/ibn-unNedim/releases). `release.yml` builds these six assets per tag:
 
 | File | Platform |
 |---|---|

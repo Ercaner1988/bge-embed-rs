@@ -8,6 +8,23 @@
 
 [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) için tek dosyalık, saf Rust (candle) tabanlı bir embedding sunucusu. OpenAI uyumlu bir `/v1/embeddings` API'si ve küçük bir masaüstü penceresi sunar. Tamamen yerelde, CPU üzerinde çalışır. Python yok, Docker yok, harici bir çalışma zamanı yok.
 
+## Ad: neden İbnü'n-Nedîm?
+
+> Bismillahirrahmanirrahim. Rahmân ve Rahîm olan Allah'ın adıyla.
+
+Bu sunucu adını, 10. yüzyıl Bağdat'ının verrâkı (kitap istinsahı ve ticaretiyle geçinen kitapçı) Ebü'l-Ferec Muhammed b. İshâk en-Nedîm'den alır. TDV İslâm Ansiklopedisi'nin [İbnü'n-Nedîm](https://islamansiklopedisi.org.tr/ibnun-nedim) maddesine göre İbnü'n-Nedîm, babası gibi verrâktı. *el-Fihrist*'i 377'de (987) yazdı; *Fihristü'l-kütüb*, *Fihristü'l-ulûm* ve *Fihristü'l-ulemâ* diye de anılan eser, İslâm dünyasında bibliyografya türünün ilk örneğidir.
+
+Adın bu depoya düşmesinin sebebi işbölümüdür. [el-Fihrist](https://github.com/Ercaner1988/el-Fihrist) bir katalogdur: yetenekleri, kodu ve hafızayı dizinler. Bir kataloğun anlamca aranabilmesi için her metnin önce okunup anlamının sayıya dökülmesi gerekir. Bu iş, verrâkın bir kitabı eline alıp fihristteki yerini belirlemesine benzer. İbnü'n-Nedîm Gömme bu okuma işini yapar: metni bge-m3 ile vektöre çevirir, katalog o vektörlerle arar. el-Fihrist'teki katalog aracının adı da `ibnunnedim`'dir (CLI); gömmeyi bu sunucudan alır. Karışmasın diye biri **CLI**, öteki **Gömme** diye anılır.
+
+Kaynak: Nasuhi Ünal Karaarslan, "İbnü'n-Nedîm", *TDV İslâm Ansiklopedisi*, c. ⚠ ATIF DOĞRULANACAK, s. ⚠ ATIF DOĞRULANACAK, https://islamansiklopedisi.org.tr/ibnun-nedim. Cilt ve sayfa, madde bu oturumdan açılamadığı için yazılmadı. Bkz. ayrıca [el-Fihrist](https://islamansiklopedisi.org.tr/el-fihrist) maddesi.
+
+### Kardeş depolar
+
+- [el-Fihrist](https://github.com/Ercaner1988/el-Fihrist): yapay zekâ ajanları için yetenek, kod ve hafıza kataloğu. Gömmeyi bu sunucudan alır; bge-m3 vektörlerinin yakın-komşu dizini (`bge-dizin`) bu depodadır.
+- [Nazar](https://github.com/Ercaner1988/Nazar): yerel dosya içeriğinde arama. Adını kelâmdaki *nazar*dan, bilinenden bilinmeyene giden akıl yürütmeden alır. Gömme arka ucu bu sunucudur.
+- [agent-reach-rs](https://github.com/Ercaner1988/agent-reach-rs) (ARR): ajanlar için web okuma motoru; TDV İslâm Ansiklopedisi künyesini maddeden okur.
+- [kilim-tema](https://github.com/Ercaner1988/kilim-tema): ortak tema (Kilim paleti, Semerkant kâğıdı).
+
 ## İndirme
 
 En güncel sürümü [Releases sayfasından](https://github.com/Ercaner1988/ibnun-nedim/releases) alın. `release.yml` her etiket için şu altı dosyayı üretir:

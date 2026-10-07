@@ -12,11 +12,13 @@
 
 > Bismillahirrahmanirrahim. Rahmân ve Rahîm olan Allah'ın adıyla.
 
-Bu sunucu adını, 10. yüzyıl Bağdat'ının verrâkı (kitap istinsahı ve ticaretiyle geçinen kitapçı) Ebü'l-Ferec Muhammed b. İshâk en-Nedîm'den alır. TDV İslâm Ansiklopedisi'nin [İbnü'n-Nedîm](https://islamansiklopedisi.org.tr/ibnun-nedim) maddesine göre İbnü'n-Nedîm, babası gibi verrâktı. *el-Fihrist*'i 377'de (987) yazdı; *Fihristü'l-kütüb*, *Fihristü'l-ulûm* ve *Fihristü'l-ulemâ* diye de anılan eser, İslâm dünyasında bibliyografya türünün ilk örneğidir.
+Bu sunucu adını Ebü'l-Ferec Muhammed b. Ebî Ya'kūb İshâk b. Muhammed b. İshâk en-Nedîm'den (ö. 385/995 [?]) alır. TDV İslâm Ansiklopedisi'nin [İbnü'n-Nedîm](https://islamansiklopedisi.org.tr/ibnun-nedim) maddesi onu "Arap bibliyografya âlimi, el-Fihrist adlı eserin müellifi" diye tanıtır ve şunu söyler: "Babası gibi İbnü'n-Nedîm de 'verrâk' idi. 'Virâka' (kitap istinsah edip ciltlemek, kitap ticareti yapmak) mesleğini babasından öğrenmiş, bu sayede devrin ilim, kültür ve sanat çevreleriyle ilişki kurma, değişik konularda pek çok kitap tanıma imkânına kavuşmuştur."
 
-Adın bu depoya düşmesinin sebebi işbölümüdür. [el-Fihrist](https://github.com/Ercaner1988/el-Fihrist) bir katalogdur: yetenekleri, kodu ve hafızayı dizinler. Bir kataloğun anlamca aranabilmesi için her metnin önce okunup anlamının sayıya dökülmesi gerekir. Bu iş, verrâkın bir kitabı eline alıp fihristteki yerini belirlemesine benzer. İbnü'n-Nedîm Gömme bu okuma işini yapar: metni bge-m3 ile vektöre çevirir, katalog o vektörlerle arar. el-Fihrist'teki katalog aracının adı da `ibnunnedim`'dir (CLI); gömmeyi bu sunucudan alır. Karışmasın diye biri **CLI**, öteki **Gömme** diye anılır.
+Eserine gelince madde, 377 (987) yılında yazılan ve "kısaca el-Fihrist diye tanınan kitabı İslâm dünyasında bibliyografik eserler türünün ilkidir" der. Eser "'makale' adını taşıyan on bölümden oluşmakta ve her bölüm 'fen' başlığıyla alt bölümlere ayrılmaktadır". Ayrıca: "Zamanla kaybolmuş pek çok eserin adı, konusu ve müellifi hakkındaki bilgiler sadece bu eser sayesinde günümüze ulaşabilmiştir."
 
-Kaynak: Nasuhi Ünal Karaarslan, "İbnü'n-Nedîm", *TDV İslâm Ansiklopedisi*, c. ⚠ ATIF DOĞRULANACAK, s. ⚠ ATIF DOĞRULANACAK, https://islamansiklopedisi.org.tr/ibnun-nedim. Cilt ve sayfa, madde bu oturumdan açılamadığı için yazılmadı. Bkz. ayrıca [el-Fihrist](https://islamansiklopedisi.org.tr/el-fihrist) maddesi.
+Adın bu depoya düşmesinin sebebi işbölümüdür. [el-Fihrist](https://github.com/Ercaner1988/el-Fihrist) bir katalogdur: yetenekleri, kodu ve hafızayı dizinler. Bir kataloğun anlamca aranabilmesi için her metnin önce okunup anlamının sayıya dökülmesi gerekir. Kitapları tanıyıp her birinin fihristteki yerini belirleyen verrâkın işine benzer bu. İbnü'n-Nedîm Gömme bu okumayı yapar: metni bge-m3 ile vektöre çevirir, katalog o vektörlerle arar. el-Fihrist'teki katalog aracının adı da `ibnunnedim`'dir (CLI) ve gömmeyi bu sunucudan alır. Karışmasın diye biri **CLI**, öteki **Gömme** diye anılır.
+
+Kaynak: Nasuhi Ünal Karaarslan, "İbnü'n-Nedîm", *TDV İslâm Ansiklopedisi*, c. 21, İstanbul 2000, s. 171-173, https://islamansiklopedisi.org.tr/ibnun-nedim. Bkz. ayrıca [el-Fihrist](https://islamansiklopedisi.org.tr/el-fihrist) maddesi.
 
 ### Kardeş depolar
 

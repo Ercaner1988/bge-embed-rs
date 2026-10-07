@@ -114,6 +114,14 @@ Tekrarlamak için:
 BENCH_SOURCE=book.txt bun lane-bench.ts gated=./target/release/ibnun-nedim.exe|1 ungated=./target/release/ibnun-nedim.exe|999
 ```
 
+## Kurulum (Windows, mcp-tools)
+
+`kur.ps1` release ikilisini derler ve `%USERPROFILE%\Desktop\mcp-tools\ibnun-nedim` klasörüne kopyalar. Oradaki eski kopya `ibnun-nedim.<zaman>.eski.exe` olarak saklanır; kopya, derlemeyle SHA-256'dan karşılaştırılır. Kopya çalışıyorsa durur; `-Durdur` önce onu kapatır, `-DerlemeYok` hazır derlemeyi kurar, `-Hedef` başka klasör seçer.
+
+```powershell
+./kur.ps1
+```
+
 ## Kaynaktan derleme
 
 ```bash

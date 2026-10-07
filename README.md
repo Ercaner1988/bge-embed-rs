@@ -114,6 +114,14 @@ To reproduce:
 BENCH_SOURCE=book.txt bun lane-bench.ts gated=./target/release/ibnun-nedim.exe|1 ungated=./target/release/ibnun-nedim.exe|999
 ```
 
+## Install (Windows, mcp-tools)
+
+`kur.ps1` builds the release binary and copies it to `%USERPROFILE%\Desktop\mcp-tools\ibnun-nedim`. An older copy there is kept as `ibnun-nedim.<time>.eski.exe`, and the copy is checked against the build with SHA-256. If the copy is running it stops; `-Durdur` stops it first, `-DerlemeYok` installs an existing build, `-Hedef` picks another folder.
+
+```powershell
+./kur.ps1
+```
+
 ## Build from source
 
 ```bash

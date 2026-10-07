@@ -857,6 +857,10 @@ fn main() -> Result<()> {
         renderer: eframe::Renderer::Wgpu,
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title(bge_settings::DISPLAY_NAME)
+            .with_icon(std::sync::Arc::new(
+                eframe::icon_data::from_png_bytes(include_bytes!("../assets/ikon-256.png"))
+                    .expect("assets/ikon-256.png is a valid PNG"),
+            ))
             .with_inner_size([480.0, 560.0])
             .with_min_inner_size([480.0, 560.0])
             .with_transparent(false),
@@ -880,6 +884,13 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_icon_decodes() {
+        let icon =
+            eframe::icon_data::from_png_bytes(include_bytes!("../assets/ikon-256.png")).unwrap();
+        assert_eq!((icon.width, icon.height), (256, 256));
+    }
 
     #[test]
     fn keeps_input_order_under_parallelism() {

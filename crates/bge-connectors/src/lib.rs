@@ -214,7 +214,11 @@ impl OpenNotebook {
     const PROVIDER: &'static str = "openai_compatible";
     /// The credential/model name we create - distinguishes ours from any
     /// other openai_compatible credential the user already has.
-    const CREDENTIAL_NAME: &'static str = "bge-embed-rs";
+    const CREDENTIAL_NAME: &'static str = "ibnun-nedim";
+    /// The name credentials were created under before the rename. Open
+    /// Notebook has no rename endpoint, so such a credential keeps it;
+    /// `connect` finds it by URL anyway, `disconnect` accepts both names.
+    const OLD_CREDENTIAL_NAME: &'static str = "bge-embed-rs";
     /// Open Notebook's provider client may send a bearer token at embed time;
     /// our server ignores auth entirely, but a placeholder is safer than
     /// leaving `api_key` unset (api/models.py:656-673 only *requires* it for
@@ -399,11 +403,7 @@ impl OpenNotebook {
             .iter()
             .any(|m| m.name.eq_ignore_ascii_case(Self::MODEL_NAME) && m.provider == Self::PROVIDER);
         let name = if name_taken {
-            format!(
-                "{} (bge-embed-rs :{})",
-                Self::MODEL_NAME,
-                port_of(embed_url)
-            )
+            format!("{} (ibnun-nedim :{})", Self::MODEL_NAME, port_of(embed_url))
         } else {
             Self::MODEL_NAME.to_string()
         };
@@ -455,7 +455,7 @@ impl OpenNotebook {
         )?;
         let Some(cred) = existing.into_iter().find(|c| {
             c.base_url.as_deref() == Some(embed_url)
-                && c.name.as_deref() == Some(Self::CREDENTIAL_NAME)
+                && matches!(c.name.as_deref(), Some(n) if n == Self::CREDENTIAL_NAME || n == Self::OLD_CREDENTIAL_NAME)
         }) else {
             return Ok(false);
         };
@@ -1508,6 +1508,43 @@ mod tests {
         let s = state.lock().unwrap();
         assert_eq!(s.credentials.len(), 2);
         assert_eq!(s.models.len(), 2);
+    }
+
+    #[test]
+    fn credential_from_before_the_rename_is_still_ours() {
+        let (base_url, state) = spawn_fake_server(None);
+        let embed_url = "http://127.0.0.1:11435/v1";
+        // A credential an older build created under the old name.
+        {
+            let mut s = state.lock().unwrap();
+            s.next_id += 1;
+            let id = format!("credential:{}", s.next_id);
+            s.credentials.push((
+                id,
+                embed_url.to_string(),
+                "openai_compatible".to_string(),
+                OpenNotebook::OLD_CREDENTIAL_NAME.to_string(),
+            ));
+        }
+        // connect reuses it (found by URL) instead of creating a second one.
+        OpenNotebook::connect(&base_url, embed_url, None).unwrap();
+        assert_eq!(state.lock().unwrap().credentials.len(), 1);
+        // disconnect recognises it as ours once another model is the default.
+        let other = {
+            let mut s = state.lock().unwrap();
+            s.next_id += 1;
+            let id = format!("model:{}", s.next_id);
+            s.models.push((
+                id.clone(),
+                "x".into(),
+                "openai_compatible".into(),
+                "credential:none".into(),
+            ));
+            id
+        };
+        state.lock().unwrap().default_embedding_model = Some(other);
+        assert!(OpenNotebook::disconnect(&base_url, embed_url, None).unwrap());
+        assert!(state.lock().unwrap().credentials.is_empty());
     }
 
     #[test]

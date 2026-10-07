@@ -1,4 +1,4 @@
-# bge-embed-rs UI design
+# İbnü'n-Nedîm Gömme (`ibnun-nedim`) UI design
 
 Source of truth for layout, spacing, type: the Penpot file (4 boards: `Status / Downloading`, `Status / Ready`,
 `Connections`, `Settings`). Every value below is a design token; the egui theme must use
@@ -67,7 +67,7 @@ Sections from top to bottom; a flexible spacer pushes the nav bar to the bottom.
 
 ## Shared parts
 
-- **Header row** (space-between, centred vertically): left = `bge-embed-rs` (title/600) over
+- **Header row** (space-between, centred vertically): left = `İbnü'n-Nedîm Gömme` (title/600) over
   `Local bge-m3 embedding server` (caption, muted), gap 4. Right = **status pill**: surface bg,
   1 px border, full radius, padding 8×4, 8 px dot + label (caption/500). Dot colour and label by
   phase: Downloading → warning, Loading → warning, Ready → success, Failed → error.

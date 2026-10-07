@@ -228,7 +228,8 @@ pub struct GuiApp {
 }
 
 /// File name for this app's saved theme choice (kilim-tema keeps one per app).
-const TEMA_ADI: &str = "bge-embed-rs";
+/// `bge_settings::migrate_old_name` copies the pre-rename one over.
+const TEMA_ADI: &str = bge_settings::APP_ID;
 
 impl GuiApp {
     pub fn new(status: Arc<Status>, ctx: &egui::Context) -> Self {
@@ -241,7 +242,16 @@ impl GuiApp {
             screen: Screen::Status,
             prev_screen: Screen::Status,
             conn: Arc::new(ConnState::default()),
-            autostart_enabled: autostart::is_enabled(),
+            autostart_enabled: {
+                // Before the first read, so the toggle shows the carried-over state.
+                if let Err(e) = autostart::migrate_old_name() {
+                    eprintln!(
+                        "start-on-login not carried over from {}: {e}",
+                        bge_settings::OLD_APP_ID
+                    );
+                }
+                autostart::is_enabled()
+            },
             model_input: effective_model(),
             tercih,
         }
@@ -329,7 +339,7 @@ fn header_row(
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = theme::GAP_XS;
             ui.label(theme::rich(
-                "bge-embed-rs",
+                bge_settings::DISPLAY_NAME,
                 theme::SIZE_TITLE,
                 Weight::SemiBold,
                 p.text,
@@ -921,7 +931,7 @@ fn settings_screen(
             ui,
             p,
             "Start when I log in",
-            "Opens bge-embed-rs automatically when you log in.",
+            "Opens İbnü'n-Nedîm Gömme automatically when you log in.",
             theme::TOGGLE_WIDTH,
             |ui| {
                 if theme::toggle(ui, p, autostart_enabled).changed() {

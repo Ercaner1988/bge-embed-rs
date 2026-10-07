@@ -1,6 +1,6 @@
 # bge-dizin
 
-bge-m3 gömmeleri için saf Rust HNSW yan dizini. Sunucunun (bge-embed-rs) ürettiği vektörleri hızlı yakın-komşu aramasına açar. Doğruluk kaynağı çağıranın veritabanıdır (el-Fihrist'te Turso tabloları); dizin her an yeniden kurulabilir.
+bge-m3 gömmeleri için saf Rust HNSW yan dizini. Sunucunun (İbnü'n-Nedîm Gömme, `ibnun-nedim`) ürettiği vektörleri hızlı yakın-komşu aramasına açar. Doğruluk kaynağı çağıranın veritabanıdır (el-Fihrist'te Turso tabloları); dizin her an yeniden kurulabilir.
 
 **Neden:** Turso 0.8.2'de yoğun vektör dizini yok (el-Fihrist ADR 0005). 100 bin × 1024 vektörde `vector_distance_cos` tam taraması, yol haritasının 50 ms eşiğinin çok üstünde ölçüldü.
 
@@ -30,7 +30,7 @@ let d = Dizin::yukle(Path::new("dizin.bged"))?;
 ```sh
 # makine ölçümü (sentetik, kümelenmiş; gerçek gömmeleri temsil etmez)
 cargo run --release -p bge-dizin --example olc -- sentetik 100000 1024 200
-# gerçek veri: önce metinleri bge-embed-rs ile göm, sonra ölç
+# gerçek veri: önce metinleri ibnun-nedim ile göm, sonra ölç
 bun crates/bge-dizin/deneme/gom.ts --klasor <metin klasörü> --cikti vektorler.f32
 cargo run --release -p bge-dizin --example olc -- gercek vektorler.f32 1024
 ```

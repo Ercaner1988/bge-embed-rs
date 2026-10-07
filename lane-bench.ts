@@ -2,7 +2,7 @@
 // under concurrent load: a real search query's latency, and batch throughput,
 // while both run against the server at once.
 // Usage: BENCH_SOURCE=book.txt bun lane-bench.ts <name=exe[|permit]> [name=exe[|permit] ...]
-//   e.g. BENCH_SOURCE=book.txt bun lane-bench.ts gated=./bge-embed-rs.exe|1 ungated=./bge-embed-rs.exe|999
+//   e.g. BENCH_SOURCE=book.txt bun lane-bench.ts gated=./ibnun-nedim.exe|1 ungated=./ibnun-nedim.exe|999
 // Runs on Bun (recommended) and on Node 22.18+ (`node lane-bench.ts ...`).
 // Env: BENCH_SOURCE (plain-text file, required, >= ~70 KB), BENCH_PORT (11439).
 //   --throughput: instead of query latency, measure wall time for a fixed

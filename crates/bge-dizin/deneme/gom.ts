@@ -1,5 +1,5 @@
 // Gerçek veri için vektör dosyası: bir klasördeki .md/.txt dosyalarını parçalara böler,
-// bge-embed-rs'in OpenAI uyumlu ucuna (POST /v1/embeddings) gönderir, ham f32 LE yazar.
+// İbnü'n-Nedîm Gömme'nin (ibnun-nedim) OpenAI uyumlu ucuna (POST /v1/embeddings) gönderir, ham f32 LE yazar.
 // Çıktıyı ölçüm alır:
 //   bun crates/bge-dizin/deneme/gom.ts --klasor <klasör> [--uc http://127.0.0.1:11434]
 //       [--cikti vektorler.f32] [--parca 1200] [--toplu 32]

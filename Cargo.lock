@@ -495,28 +495,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bge-embed-rs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "bge-gui",
- "bge-settings",
- "bge-theme",
- "candle-core",
- "candle-nn",
- "candle-transformers",
- "eframe",
- "hf-hub",
- "rayon",
- "serde",
- "serde_json",
- "tokenizers",
- "tokio",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "bge-gui"
 version = "0.1.0"
 dependencies = [
@@ -2245,6 +2223,28 @@ dependencies = [
  "tower-service",
  "tracing",
  "windows-registry",
+]
+
+[[package]]
+name = "ibnun-nedim"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bge-gui",
+ "bge-settings",
+ "bge-theme",
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "eframe",
+ "hf-hub",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tokenizers",
+ "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

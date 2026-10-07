@@ -1,4 +1,4 @@
-# bge-embed-rs
+# İbnü'n-Nedîm Gömme (`ibnun-nedim`)
 
 [English](README.md)
 
@@ -6,16 +6,16 @@
 
 ## İndirme
 
-En güncel sürümü [Releases sayfasından](https://github.com/Ercaner1988/bge-embed-rs/releases) alın. `release.yml` her etiket için şu altı dosyayı üretir:
+En güncel sürümü [Releases sayfasından](https://github.com/Ercaner1988/ibnun-nedim/releases) alın. `release.yml` her etiket için şu altı dosyayı üretir:
 
 | Dosya | Platform |
 |---|---|
-| `bge-embed-rs-x86_64-pc-windows-msvc.exe` | Windows, x86-64 |
-| `bge-embed-rs-aarch64-pc-windows-msvc.exe` | Windows, ARM64 |
-| `bge-embed-rs-x86_64-unknown-linux-gnu` | Linux, x86-64 |
-| `bge-embed-rs-aarch64-unknown-linux-gnu` | Linux, ARM64 |
-| `bge-embed-rs-x86_64-apple-darwin` | macOS, Intel |
-| `bge-embed-rs-aarch64-apple-darwin` | macOS, Apple Silicon |
+| `ibnun-nedim-x86_64-pc-windows-msvc.exe` | Windows, x86-64 |
+| `ibnun-nedim-aarch64-pc-windows-msvc.exe` | Windows, ARM64 |
+| `ibnun-nedim-x86_64-unknown-linux-gnu` | Linux, x86-64 |
+| `ibnun-nedim-aarch64-unknown-linux-gnu` | Linux, ARM64 |
+| `ibnun-nedim-x86_64-apple-darwin` | macOS, Intel |
+| `ibnun-nedim-aarch64-apple-darwin` | macOS, Apple Silicon |
 
 x86-64 derlemeleri `x86-64-v3` hedefiyle yapılır (AVX2 + FMA + BMI — Intel Haswell 2013 ve sonrası, AMD Excavator/Zen 2015 ve sonrası). Bu özellikleri desteklemeyen eski bir işlemcide uygulama çökmek yerine başlamayı reddeder ve nedenini söyler.
 
@@ -107,7 +107,7 @@ düşürdü, bedeli 3 eşzamanlı istemciyle 3 dönen turda ölçülen yaklaşı
 Tekrarlamak için:
 
 ```bash
-BENCH_SOURCE=book.txt bun lane-bench.ts gated=./target/release/bge-embed-rs.exe|1 ungated=./target/release/bge-embed-rs.exe|999
+BENCH_SOURCE=book.txt bun lane-bench.ts gated=./target/release/ibnun-nedim.exe|1 ungated=./target/release/ibnun-nedim.exe|999
 ```
 
 ## Kaynaktan derleme

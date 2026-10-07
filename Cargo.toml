@@ -4,7 +4,7 @@ members = [".", "crates/*"]
 [workspace.package]
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/Ercaner1988/ibnun-nedim"
+repository = "https://github.com/Ercaner1988/ibn-unNedim"
 
 [workspace.dependencies]
 bge-settings = { path = "crates/bge-settings" }

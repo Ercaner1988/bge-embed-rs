@@ -33,7 +33,7 @@ Kaynak: Nasuhi Ünal Karaarslan, "İbnü'n-Nedîm", *TDV İslâm Ansiklopedisi*,
 
 ## İndirme
 
-En güncel sürümü [Releases sayfasından](https://github.com/Ercaner1988/ibnun-nedim/releases) alın. `release.yml` her etiket için şu altı dosyayı üretir:
+En güncel sürümü [Releases sayfasından](https://github.com/Ercaner1988/ibn-unNedim/releases) alın. `release.yml` her etiket için şu altı dosyayı üretir:
 
 | Dosya | Platform |
 |---|---|

@@ -2,7 +2,7 @@
 
 <p align="center"><img src="assets/ikon.png" alt="İbnü'n-Nedîm Gömme icon" width="256"></p>
 
-<p align="center"><sub>Icon: made by Ercan Er with Google Gemini (2026-10).</sub></p>
+<p align="center"><sub>Icon: made by Ercan Er with Google Gemini (2026-10); Arabic name «ابن النديم» set in Amiri (SIL Open Font License).</sub></p>
 
 [Türkçe](README.tr.md)
 

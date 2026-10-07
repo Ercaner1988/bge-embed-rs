@@ -8,6 +8,23 @@
 
 A single-file, pure-Rust (candle) embedding server for [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3), with an OpenAI-compatible `/v1/embeddings` API and a small desktop window. Runs fully locally, on CPU. No Python, no Docker, no external runtime.
 
+## Name: why Ibn al-Nadim?
+
+> Bismillahirrahmanirrahim. In the name of God, the Most Gracious, the Most Merciful.
+
+This server is named after Abu al-Faraj Muhammad ibn Ishaq al-Nadim, a *warraq* (copyist and bookseller) of tenth-century Baghdad. According to the TDV Encyclopedia of Islam entry [İbnü'n-Nedîm](https://islamansiklopedisi.org.tr/ibnun-nedim), he was a warraq like his father and wrote *al-Fihrist* in 377 AH (987 CE). The work, also known as *Fihrist al-kutub*, *Fihrist al-ulum* and *Fihrist al-ulama*, is the first of its kind in the bibliographic literature of the Islamic world.
+
+The name lands here because of a division of labour. [el-Fihrist](https://github.com/Ercaner1988/el-Fihrist) is the catalogue: it indexes skills, code and memory. To search a catalogue by meaning, every text first has to be read and its meaning turned into numbers, much as the warraq took up each book and decided its place in the Fihrist. İbnü'n-Nedîm Gömme ("embedding") does that reading: it turns text into bge-m3 vectors, and the catalogue searches with them. The catalogue tool in el-Fihrist is also called `ibnunnedim` (the CLI) and takes its embeddings from this server; to keep them apart, one is the **CLI** and the other the **Gömme**.
+
+Source: Nasuhi Ünal Karaarslan, "İbnü'n-Nedîm", *TDV İslâm Ansiklopedisi*, vol. ⚠ TO BE VERIFIED, pp. ⚠ TO BE VERIFIED, https://islamansiklopedisi.org.tr/ibnun-nedim. Volume and pages are left open because the entry could not be opened from this session. See also the [el-Fihrist](https://islamansiklopedisi.org.tr/el-fihrist) entry.
+
+### Sister repositories
+
+- [el-Fihrist](https://github.com/Ercaner1988/el-Fihrist): skill, code and memory catalogue for AI agents. Takes its embeddings from this server; the nearest-neighbour index for bge-m3 vectors (`bge-dizin`) lives in this repository.
+- [Nazar](https://github.com/Ercaner1988/Nazar): search inside local file contents, named after *nazar*, reasoning from the known to the unknown in kalam. Its embedding backend is this server.
+- [agent-reach-rs](https://github.com/Ercaner1988/agent-reach-rs) (ARR): web reading engine for agents; reads TDV Encyclopedia of Islam citations from the entry itself.
+- [kilim-tema](https://github.com/Ercaner1988/kilim-tema): shared theme (Kilim palette, Samarkand paper).
+
 ## Download
 
 Get the latest build from the [Releases page](https://github.com/Ercaner1988/ibnun-nedim/releases). `release.yml` builds these six assets per tag:

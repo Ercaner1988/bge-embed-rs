@@ -52,6 +52,8 @@ bge-theme.workspace = true
 bge-gui.workspace = true
 eframe.workspace = true
 rayon = "1"
+# f16 ağırlık saklama (F16C dönüşümü); candle zaten çekiyor, ağaca yeni crate eklemez.
+half = "2"
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

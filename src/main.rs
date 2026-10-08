@@ -36,7 +36,7 @@ use std::sync::{
 use tokenizers::{Tokenizer, TruncationParams};
 
 mod hizli;
-use hizli::{ArtikLn, BiasGelu, Dikkat, linear};
+use hizli::{ArtikLn, BiasGelu, Dikkat, F16e, linear};
 
 use bge_settings::{
     Phase, Status, effective_host, effective_model, effective_parallel, effective_port,
@@ -93,7 +93,10 @@ impl Katman {
         let att = vb.pp("attention");
         let (s, o) = (att.pp("self"), att.pp("output"));
         let w = |vb: &VarBuilder, ad: &str, cikti: usize, girdi: usize| -> Result<Tensor> {
-            Ok(vb.pp(ad).get((cikti, girdi), "weight")?)
+            Ok(vb
+                .pp(ad)
+                .get((cikti, girdi), "weight")?
+                .apply_op1_no_bwd(&F16e)?)
         };
         let v = |vb: &VarBuilder, ad: &str, n: usize, alan: &str| -> Result<Vec<f32>> {
             Ok(vb.pp(ad).get(n, alan)?.to_vec1::<f32>()?)
@@ -191,11 +194,15 @@ impl EmbedModel {
         let vb = VarBuilder::from_pth(&weights_path, DTYPE, &device)?;
 
         let embeddings_vb = vb.pp("embeddings");
-        let word_embeddings = embedding(
-            config.vocab_size,
+        // Sözcük tablosu (250 002 × 1024) ve katman ağırlıkları f16 saklanır: f32'de 2,27 GB
+        // olan model ~1,2 GB'a iner; hesap f32 kalır (satırlar kullanılırken açılır).
+        let word_embeddings = Embedding::new(
+            embeddings_vb
+                .pp("word_embeddings")
+                .get((config.vocab_size, config.hidden_size), "weight")?
+                .apply_op1_no_bwd(&F16e)?,
             config.hidden_size,
-            embeddings_vb.pp("word_embeddings"),
-        )?;
+        );
         let position_embeddings = embedding(
             config.max_position_embeddings,
             config.hidden_size,
@@ -257,7 +264,10 @@ impl EmbedModel {
         let position_ids = Tensor::from_vec(pos, (b, l), &self.device)?;
         let token_type_ids = input_ids.zeros_like()?;
 
-        let embeddings = (&self.word_embeddings.forward(&input_ids)?
+        let embeddings = (&self
+            .word_embeddings
+            .forward(&input_ids)?
+            .to_dtype(candle_core::DType::F32)?
             + self.token_type_embeddings.forward(&token_type_ids)?)?;
         let embeddings = (embeddings + self.position_embeddings.forward(&position_ids)?)?;
         let h = embeddings.dim(2)?;
@@ -508,7 +518,7 @@ struct AppState {
     status: Arc<Status>,
 }
 
-/// Sistem belleği bu yüzdeyi aşınca boştaki model bellekten atılır (f32 ağırlıklar ~2,3 GB).
+/// Sistem belleği bu yüzdeyi aşınca boştaki model bellekten atılır (f16 ağırlıklar ~1,2 GB).
 /// `BGE_BELLEK_ESIGI` (1-100) ile değişir; 100 yalnız bellek tümüyle dolunca boşaltır.
 fn bellek_esigi() -> u32 {
     static N: std::sync::LazyLock<u32> = std::sync::LazyLock::new(|| {
@@ -676,7 +686,7 @@ const VARSAYILAN_TOPLU_IZIN: usize = 1;
 ///   kuyruğa koyduğu görevlerin arkasında bekliyordu (katman ~2,7 sn);
 /// - havuz iş parçacıkları bir kademe yüksek öncelikli: süren katmanla çakışırken CPU payı;
 /// - toplu iş katman aralarında bekler (`hizliya_yol_ver`): sorgu da bütün ağırlıkları
-///   (2,3 GB) bellekten okur, bellek bant genişliğini öncelik paylaştırmaz.
+///   (f16, ~1,2 GB) bellekten okur, bellek bant genişliğini öncelik paylaştırmaz.
 ///
 /// Eski şerit 3-12 sn; yalnız bekleme 1,8-3 sn; bekleme + havuz 0,8-2,8 sn; üçü 0,12-0,32 sn.
 static HIZLI_HAVUZ: std::sync::LazyLock<rayon::ThreadPool> = std::sync::LazyLock::new(|| {

@@ -8,6 +8,7 @@
 use candle_core::{
     CpuStorage, CustomOp1, CustomOp2, Layout, Result, Shape, Tensor, bail, cpu::erf::erf_f32,
 };
+use half::{f16, slice::HalfFloatSliceExt};
 use rayon::prelude::*;
 
 /// Bu satır sayısının altında matmul yerine `KucukLinear` kullanılır (ölçümle seçildi).
@@ -18,6 +19,48 @@ fn f32_dilim<'a>(s: &'a CpuStorage, l: &Layout) -> Result<&'a [f32]> {
     match l.contiguous_offsets() {
         Some((a, b)) => Ok(&v[a..b]),
         None => bail!("hizli: tensör bitişik olmalı"),
+    }
+}
+
+fn f16_dilim<'a>(s: &'a CpuStorage, l: &Layout) -> Result<&'a [f16]> {
+    let v = s.as_slice::<f16>()?;
+    match l.contiguous_offsets() {
+        Some((a, b)) => Ok(&v[a..b]),
+        None => bail!("hizli: tensör bitişik olmalı"),
+    }
+}
+
+/// Ağırlık saklama biçimi değişimi (f32 ⇄ f16), rayon ile paralel, F16C ile vektörel.
+/// candle'ın `to_dtype`'u tek iş parçacıklı ve öğe öğe: 568 M ağırlıkta saniyeler sürer.
+pub struct F16e;
+pub struct F32ye;
+const DONUSUM_PARCA: usize = 1 << 16;
+
+impl CustomOp1 for F16e {
+    fn name(&self) -> &'static str {
+        "f16e"
+    }
+    fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
+        let x = f32_dilim(s, l)?;
+        let mut y = vec![f16::ZERO; x.len()];
+        y.par_chunks_mut(DONUSUM_PARCA)
+            .zip(x.par_chunks(DONUSUM_PARCA))
+            .for_each(|(o, i)| o.convert_from_f32_slice(i));
+        Ok((CpuStorage::F16(y), l.shape().clone()))
+    }
+}
+
+impl CustomOp1 for F32ye {
+    fn name(&self) -> &'static str {
+        "f32ye"
+    }
+    fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
+        let x = f16_dilim(s, l)?;
+        let mut y = vec![0f32; x.len()];
+        y.par_chunks_mut(DONUSUM_PARCA)
+            .zip(x.par_chunks(DONUSUM_PARCA))
+            .for_each(|(o, i)| i.convert_to_f32_slice(o));
+        Ok((CpuStorage::F32(y), l.shape().clone()))
     }
 }
 
@@ -39,8 +82,9 @@ fn nokta(a: &[f32], b: &[f32]) -> f32 {
     s
 }
 
-/// y = x · wᵀ, x (m,k), w (n,k) bitişik. W satırı bir kez bellekten okunur, m satırla L1'den
-/// yeniden kullanılır; n üzerinden paralel. Küçük m'de gemm'den bellek-bant sınırına yakındır.
+/// y = x · wᵀ, x (m,k) f32, w (n,k) f16 bitişik. W satırı bir kez bellekten okunur, f32'ye açılıp
+/// m satırla L1'den yeniden kullanılır; n üzerinden paralel. Küçük m'de iş bellek bandına
+/// bağlı: f16 ağırlık okunan baytı yarıya indirir.
 pub struct KucukLinear;
 
 impl CustomOp2 for KucukLinear {
@@ -54,7 +98,7 @@ impl CustomOp2 for KucukLinear {
         s2: &CpuStorage,
         l2: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        let (x, w) = (f32_dilim(s1, l1)?, f32_dilim(s2, l2)?);
+        let (x, w) = (f32_dilim(s1, l1)?, f16_dilim(s2, l2)?);
         let (m, k) = l1.shape().dims2()?;
         let n = l2.shape().dims2()?.0;
         const SATIR: usize = 16;
@@ -63,10 +107,11 @@ impl CustomOp2 for KucukLinear {
         yt.par_chunks_mut(SATIR * m)
             .enumerate()
             .for_each(|(c, out)| {
+                let mut wj = vec![0f32; k];
                 for (jj, o) in out.chunks_mut(m).enumerate() {
-                    let wj = &w[(c * SATIR + jj) * k..][..k];
+                    w[(c * SATIR + jj) * k..][..k].convert_to_f32_slice(&mut wj);
                     for (r, v) in o.iter_mut().enumerate() {
-                        *v = nokta(&x[r * k..][..k], wj);
+                        *v = nokta(&x[r * k..][..k], &wj);
                     }
                 }
             });
@@ -230,12 +275,15 @@ impl CustomOp1 for Dikkat<'_> {
     }
 }
 
-/// y = x · wᵀ: küçük m'de `KucukLinear`, aksi halde candle matmul (gemm).
+/// y = x · wᵀ (w f16): küçük m'de `KucukLinear`, aksi halde candle matmul (gemm).
 pub fn linear(x: &Tensor, w: &Tensor) -> Result<Tensor> {
     if x.dim(0)? <= KUCUK_M {
         x.apply_op2_no_bwd(w, &KucukLinear)
     } else {
-        x.matmul(&w.t()?)
+        // ponytail: ağırlık her çağrıda f32'ye açılır (katman başı ~50 MB geçici, ~ms); büyük m'de
+        // gemm süresinin yanında küçük. Toplu indeksleme bunu ölçülür biçimde yavaş bulursa
+        // f16 girdili gemm'e geç.
+        x.matmul(&w.apply_op1_no_bwd(&F32ye)?.t()?)
     }
 }
 
@@ -272,9 +320,28 @@ mod tests {
     #[test]
     fn kucuk_linear_matmul_ile_ayni() {
         let (x, w) = (rastgele(&[5, 1037], 1), rastgele(&[70, 1037], 2));
-        let a = x.apply_op2_no_bwd(&w, &KucukLinear).unwrap();
-        let b = x.matmul(&w.t().unwrap()).unwrap();
+        let w16 = w.apply_op1_no_bwd(&F16e).unwrap();
+        let a = x.apply_op2_no_bwd(&w16, &KucukLinear).unwrap();
+        let b = x
+            .matmul(&w16.to_dtype(candle_core::DType::F32).unwrap().t().unwrap())
+            .unwrap();
         assert!(en_fazla_fark(&a, &b) < 1e-4);
+        // Büyük m yolu (gemm) aynı sonucu verir.
+        let x = rastgele(&[KUCUK_M + 3, 1037], 3);
+        let a = linear(&x, &w16).unwrap();
+        let b = x.apply_op2_no_bwd(&w16, &KucukLinear).unwrap();
+        assert!(en_fazla_fark(&a, &b) < 1e-4);
+    }
+
+    #[test]
+    fn f16_donusumu_candle_ile_ayni() {
+        let w = rastgele(&[3, 70_001], 4);
+        let a = w.apply_op1_no_bwd(&F16e).unwrap();
+        let e = w.to_dtype(candle_core::DType::F16).unwrap();
+        assert_eq!(a.to_vec2::<f16>().unwrap(), e.to_vec2::<f16>().unwrap());
+        let geri = a.apply_op1_no_bwd(&F32ye).unwrap();
+        let e = e.to_dtype(candle_core::DType::F32).unwrap();
+        assert_eq!(en_fazla_fark(&geri, &e), 0.0);
     }
 
     #[test]

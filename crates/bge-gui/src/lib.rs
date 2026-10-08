@@ -743,8 +743,142 @@ fn tool_row(ui: &mut Ui, p: Palette, tool: Tool, conn: &Arc<ConnState>) -> bool 
     true
 }
 
+/// "12 s" / "4 min" / "2 h" / "3 d" since `t`.
+fn ago(t: std::time::SystemTime) -> String {
+    let s = t.elapsed().map_or(0, |d| d.as_secs());
+    match s {
+        0..60 => format!("{s} s"),
+        60..3600 => format!("{} min", s / 60),
+        3600..86_400 => format!("{} h", s / 3600),
+        _ => format!("{} d", s / 86_400),
+    }
+}
+
+/// "Keşfü'z-Zunûn" -> "KZ", "Nazar" -> "NA".
+fn initials_of(name: &str) -> String {
+    let words: Vec<&str> = name
+        .split([' ', '-', '\'', '’'])
+        .filter(|w| !w.is_empty())
+        .collect();
+    let chars: Vec<char> = match words.as_slice() {
+        [one] => one.chars().take(2).collect(),
+        many => many
+            .iter()
+            .filter_map(|w| w.chars().next())
+            .take(2)
+            .collect(),
+    };
+    chars.iter().map(|c| c.to_ascii_uppercase()).collect()
+}
+
+/// Our own tools that call this server (bge-clients ledger): who sent requests, when, and
+/// whether the last one failed - a client giving up mid-request is how a dropped
+/// connection shows from this side. Open problems stay red until that tool succeeds again.
+fn local_tools_card(ui: &mut Ui, p: Palette) {
+    let (tools, events) = bge_clients::defter().anlik();
+    theme::card(ui, p, |ui| {
+        ui.label(theme::rich(
+            "Local tools using this server",
+            theme::SIZE_BODY,
+            Weight::SemiBold,
+            p.text,
+        ));
+        let open: Vec<&bge_clients::Sorun> = tools.iter().filter_map(|k| k.acik_sorun()).collect();
+        if !open.is_empty() {
+            ui.add_space(theme::GAP_SM);
+            // Kırmızı çerçeveli uyarı kutusu: düz kırmızı yazı seçim vurgusuyla karışıyordu.
+            egui::Frame::new()
+                .fill(p.error.gamma_multiply(0.12))
+                .stroke(egui::Stroke::new(1.0, p.error))
+                .corner_radius(6)
+                .inner_margin(theme::GAP_SM)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    for s in &open {
+                        let what = if s.panik {
+                            "Panic"
+                        } else {
+                            "Connection problem"
+                        };
+                        ui.add(
+                            egui::Label::new(theme::rich(
+                                format!("{what} ({} ago)", ago(s.zaman)),
+                                theme::SIZE_CAPTION,
+                                Weight::SemiBold,
+                                p.error,
+                            ))
+                            .selectable(false),
+                        );
+                        ui.add(
+                            egui::Label::new(theme::rich(
+                                &s.metin,
+                                theme::SIZE_CAPTION,
+                                Weight::Regular,
+                                p.text,
+                            ))
+                            .selectable(false),
+                        );
+                    }
+                });
+        }
+        ui.add_space(theme::GAP_MD);
+        for (i, k) in tools.iter().enumerate() {
+            if i > 0 {
+                ui.add_space(theme::GAP_MD);
+            }
+            let (dot, meta) = match (k.acik_sorun(), k.son) {
+                (Some(s), _) => (
+                    p.error,
+                    format!(
+                        "Last request failed {} ago · {} of {} failed",
+                        ago(s.zaman),
+                        k.hatali,
+                        k.istek
+                    ),
+                ),
+                (None, None) => (
+                    p.text_muted,
+                    "No requests since this server started".to_string(),
+                ),
+                (None, Some(t)) if t.elapsed().is_ok_and(|d| d.as_secs() < 600) => (
+                    p.success,
+                    format!(
+                        "Active · last request {} ago, {} ms · {} requests",
+                        ago(t),
+                        k.son_sure_ms,
+                        k.istek
+                    ),
+                ),
+                (None, Some(t)) => (
+                    p.text_muted,
+                    format!("Idle · last request {} ago · {} requests", ago(t), k.istek),
+                ),
+            };
+            connector_row(ui, p, &initials_of(&k.ad), &k.ad, dot, &meta, |_| {});
+        }
+        if !events.is_empty() {
+            ui.add_space(theme::GAP_SM);
+            egui::CollapsingHeader::new(format!("Recent events ({})", events.len()))
+                .id_salt("local-tools-events")
+                .show(ui, |ui| {
+                    for o in &events {
+                        let color = if o.agir { p.error } else { p.text_muted };
+                        ui.label(theme::rich(
+                            format!("{} ago · {}", ago(o.zaman), o.metin),
+                            theme::SIZE_CAPTION,
+                            Weight::Regular,
+                            color,
+                        ));
+                    }
+                });
+        }
+    });
+}
+
 fn connections_screen(ui: &mut Ui, p: Palette, conn: &Arc<ConnState>) {
     ui.spacing_mut().item_spacing.y = theme::GAP_LG;
+
+    local_tools_card(ui, p);
 
     theme::card(ui, p, |ui| {
         ui.horizontal(|ui| {

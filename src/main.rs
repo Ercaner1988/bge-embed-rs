@@ -23,7 +23,10 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use anyhow::{Error as E, Result, anyhow};
-use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
+use axum::{
+    Json, Router, extract::ConnectInfo, extract::State, http::StatusCode, response::IntoResponse,
+    routing::post,
+};
 use candle_core::{Device, IndexOp, Tensor};
 use candle_nn::{Embedding, LayerNorm, Module, VarBuilder, embedding, layer_norm};
 use candle_transformers::models::bert::{Config, DTYPE, HiddenAct};
@@ -565,6 +568,7 @@ impl Yuva {
                 ben.status.set_phase(e);
             }
             println!("model yeniden yüklendi");
+            bge_clients::defter().olay("Model reloaded into memory", false);
             *ben.model.lock().unwrap() = Some(m.clone());
             Ok(m)
         })
@@ -598,9 +602,29 @@ fn bellek_yuku() -> Option<u32> {
     None
 }
 
+/// İsteği defterlere yazar (bge-clients): hangi araç, ne kadar sürdü, hata ya da istemci ayrıldı mı.
+/// İstemci yanıtı beklemeden bağlantıyı kapatırsa axum bu geleceği düşürür; bekçi bunu yakalar.
 async fn embeddings_handler(
     State(state): State<AppState>,
+    ConnectInfo(uzak): ConnectInfo<std::net::SocketAddr>,
     Json(req): Json<EmbeddingRequest>,
+) -> Result<Json<EmbeddingResponse>, (StatusCode, String)> {
+    let port = effective_port().parse().unwrap_or(0);
+    let bekci = bge_clients::defter().istek(bge_clients::tanimla(uzak, port));
+    let sonuc = gom(state, req).await;
+    bekci.bitir(match &sonuc {
+        Ok(_) => bge_clients::Sonuc::Tamam,
+        Err((_, e)) if e.starts_with(PANIK) => bge_clients::Sonuc::Panik(e.clone()),
+        Err((_, e)) => bge_clients::Sonuc::Hata(e.clone()),
+    });
+    sonuc
+}
+
+const PANIK: &str = "panic: ";
+
+async fn gom(
+    state: AppState,
+    req: EmbeddingRequest,
 ) -> Result<Json<EmbeddingResponse>, (StatusCode, String)> {
     let inputs = req.input.into_vec();
     let text_count = inputs.len();
@@ -638,7 +662,14 @@ async fn embeddings_handler(
         false => model.embed_many(&inputs, true),
     })
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| {
+        let m = if e.is_panic() {
+            format!("{PANIK}{e}")
+        } else {
+            e.to_string()
+        };
+        (StatusCode::INTERNAL_SERVER_ERROR, m)
+    })?
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let toplam_ms = started.elapsed().as_millis() as u64;
@@ -759,6 +790,12 @@ async fn run_server(status: Arc<Status>) -> Result<()> {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             if let Some(yuk) = izleyici.bosalt_gerekirse() {
                 println!("bellek %{yuk}: model bellekten atıldı, ilk istekte yüklenecek");
+                bge_clients::defter().olay(
+                    format!(
+                        "Memory at {yuk}%: idle model unloaded; the next request waits for a reload"
+                    ),
+                    false,
+                );
             }
         }
     });
@@ -779,7 +816,12 @@ async fn run_server(status: Arc<Status>) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     println!("{} listening on {url}", bge_settings::APP_ID);
     status.set_phase(Phase::Ready { url });
-    axum::serve(listener, app).await?;
+    // Bağlantı bilgisi: isteği hangi yerel aracın gönderdiğini bulmak için (bge-clients).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 

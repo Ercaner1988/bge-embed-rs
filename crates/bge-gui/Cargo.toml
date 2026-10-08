@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 bge-settings.workspace = true
+bge-clients.workspace = true
 bge-connectors.workspace = true
 bge-theme.workspace = true
 eframe.workspace = true

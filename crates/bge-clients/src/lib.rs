@@ -14,6 +14,9 @@ use std::net::SocketAddr;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
+mod is;
+pub use is::{Evre, Is, IsBekcisi};
+
 /// Exe adında geçen parça → görünen ad (ilk eşleşen kazanır).
 const ADA_GORE: &[(&str, &str)] = &[
     ("nazard", "Nazar"),
@@ -108,6 +111,9 @@ pub struct Defter {
 struct Ic {
     kayitlar: Vec<Kayit>,
     olaylar: VecDeque<Olay>,
+    isler: Vec<is::IsKaydi>,
+    /// İstek ve iş kimlikleri için.
+    sayac: u64,
 }
 
 /// Süreç geneli defter.
@@ -192,8 +198,13 @@ impl Defter {
 
     /// İstek başında çağrılır; `bitir` çağrılmadan düşerse istemci ayrılmış sayılır.
     pub fn istek(&'static self, ad: String) -> Istek {
+        let id = self.ic.lock().map_or(0, |mut ic| {
+            ic.sayac += 1;
+            ic.sayac
+        });
         Istek {
             defter: self,
+            id,
             ad,
             bas: Instant::now(),
             bitti: false,
@@ -216,6 +227,7 @@ fn olay_ekle(l: &mut VecDeque<Olay>, metin: String, agir: bool) {
 /// düşer ve `bitir` görmediği için bunu "istemci ayrıldı" diye yazar.
 pub struct Istek {
     defter: &'static Defter,
+    id: u64,
     ad: String,
     bas: Instant,
     bitti: bool,
@@ -231,6 +243,7 @@ impl Istek {
 impl Drop for Istek {
     fn drop(&mut self) {
         if !self.bitti {
+            self.defter.sahipsiz_birak(self.id);
             self.defter
                 .kaydet(&self.ad, self.bas.elapsed(), Sonuc::Ayrildi);
         }

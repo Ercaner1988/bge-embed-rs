@@ -41,6 +41,7 @@ use tokenizers::{Tokenizer, TruncationParams};
 mod hizli;
 use hizli::{ArtikLn, BiasGelu, Dikkat, F16e, linear};
 
+use bge_clients::Evre;
 use bge_settings::{
     Phase, Status, effective_host, effective_model, effective_parallel, effective_port,
 };
@@ -611,7 +612,7 @@ async fn embeddings_handler(
 ) -> Result<Json<EmbeddingResponse>, (StatusCode, String)> {
     let port = effective_port().parse().unwrap_or(0);
     let bekci = bge_clients::defter().istek(bge_clients::tanimla(uzak, port));
-    let sonuc = gom(state, req).await;
+    let sonuc = gom(state, req, &bekci).await;
     bekci.bitir(match &sonuc {
         Ok(_) => bge_clients::Sonuc::Tamam,
         Err((_, e)) if e.starts_with(PANIK) => bge_clients::Sonuc::Panik(e.clone()),
@@ -625,22 +626,28 @@ const PANIK: &str = "panic: ";
 async fn gom(
     state: AppState,
     req: EmbeddingRequest,
+    bekci: &bge_clients::Istek,
 ) -> Result<Json<EmbeddingResponse>, (StatusCode, String)> {
     let inputs = req.input.into_vec();
     let text_count = inputs.len();
     let started = std::time::Instant::now();
-    let model = state
-        .model
-        .al()
-        .await
-        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
+    let model = {
+        let _evre = bekci.evre(Evre::ModelBekliyor, text_count);
+        state
+            .model
+            .al()
+            .await
+            .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?
+    };
     // Iki serit: tek ve kisa metinli istek (arama sorgusu) kapiyi atlar; toplu istekler
     // (Open Notebook) TOPLU_KAPI'dan birer birer gecer. Kapi yokken N eszamanli toplu istek
     // N*parallel is parcacigi aciyordu ve kisa sorgu CPU'dan 1/(N*parallel+1) pay aliyordu
     // (2026-09-25 olculdu: ayni sorgu yuk altinda 7,4 / 47 / 2,8 sn, bosken ~0,65 sn).
-    let _izin = if kisa_mi(&inputs) {
+    let hizli = kisa_mi(&inputs);
+    let izin = if hizli {
         None
     } else {
+        let _evre = bekci.evre(Evre::SiraBekliyor, text_count);
         Some(
             TOPLU_KAPI
                 .acquire()
@@ -650,16 +657,29 @@ async fn gom(
     };
     // Girdiler uzunluğa göre partilenir (en fazla `BGE_PARALLEL` parti aynı anda); her parti
     // tek ileri geçiştir ve rayon ile tüm çekirdeklere yayılır (bkz. hizli.rs).
-    let serit = if _izin.is_none() {
+    let serit = if hizli {
         "hızlı şerit"
     } else {
         "toplu şerit"
     };
-    let hizli = _izin.is_none();
-    let _suren = hizli.then(HizliSuren::yeni);
-    let (result, profil) = tokio::task::spawn_blocking(move || match hizli {
-        true => HIZLI_HAVUZ.install(|| model.embed_many(&inputs, false)),
-        false => model.embed_many(&inputs, true),
+    let suren = hizli.then(HizliSuren::yeni);
+    let hesap = bekci.evre(
+        if hizli {
+            Evre::HizliHesap
+        } else {
+            Evre::TopluHesap
+        },
+        text_count,
+    );
+    let (result, profil) = tokio::task::spawn_blocking(move || {
+        // Kapı izni, hızlı şerit sayacı ve iş kaydı hesapla birlikte yaşar. İstemci yanıtı
+        // beklemeden gidince axum bu işleyiciyi düşürür; izin burada olmasaydı hesap sürerken
+        // sonraki toplu iş de başlar, ikisi üst üste binerdi.
+        let (_izin, _suren, _hesap) = (izin, suren, hesap);
+        match hizli {
+            true => HIZLI_HAVUZ.install(|| model.embed_many(&inputs, false)),
+            false => model.embed_many(&inputs, true),
+        }
     })
     .await
     .map_err(|e| {

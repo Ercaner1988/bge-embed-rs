@@ -875,9 +875,88 @@ fn local_tools_card(ui: &mut Ui, p: Palette) {
     });
 }
 
+/// What a job's stage is called, and after how many seconds it starts to look stuck
+/// (bar turns yellow at half of that, red at all of it).
+fn stage_label(evre: bge_clients::Evre) -> (&'static str, f32) {
+    match evre {
+        bge_clients::Evre::ModelBekliyor => ("waiting for the model to load", 40.0),
+        bge_clients::Evre::SiraBekliyor => ("waiting in the batch queue", 60.0),
+        bge_clients::Evre::HizliHesap => ("search query", 3.0),
+        bge_clients::Evre::TopluHesap => ("batch job", 120.0),
+    }
+}
+
+/// Live view of the server's work: which tool's request is computing, which ones wait (for
+/// the model, or for the one-at-a-time batch gate), and for how long. A time bar per job
+/// fills towards that stage's "looks stuck" threshold: green, then yellow, then red.
+fn work_card(ui: &mut Ui, p: Palette) {
+    let jobs = bge_clients::defter().isler();
+    theme::card(ui, p, |ui| {
+        let running = jobs.iter().filter(|j| !j.evre.bekliyor_mu()).count();
+        let waiting = jobs.len() - running;
+        ui.horizontal(|ui| {
+            ui.label(theme::rich(
+                "Work in progress",
+                theme::SIZE_BODY,
+                Weight::SemiBold,
+                p.text,
+            ));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let summary = if jobs.is_empty() {
+                    "Idle".to_string()
+                } else {
+                    format!("{running} computing · {waiting} waiting")
+                };
+                ui.label(theme::rich(
+                    summary,
+                    theme::SIZE_CAPTION,
+                    Weight::Regular,
+                    p.text_muted,
+                ));
+            });
+        });
+        for j in &jobs {
+            ui.add_space(theme::GAP_SM);
+            let (stage, stuck_after) = stage_label(j.evre);
+            let secs = j.bas.elapsed().as_secs_f32();
+            let ratio = (secs / stuck_after).min(1.0);
+            let color = if ratio >= 1.0 {
+                p.error
+            } else if ratio >= 0.5 {
+                p.warning
+            } else {
+                p.success
+            };
+            let mut line = format!("{} · {stage} · {} text(s) · {secs:.1} s", j.ad, j.metin);
+            if j.sahipsiz {
+                line.push_str(" · the tool stopped waiting, still computing");
+            }
+            if ratio >= 1.0 {
+                line.push_str(" · taking unusually long");
+            }
+            ui.add(
+                egui::Label::new(theme::rich(
+                    line,
+                    theme::SIZE_CAPTION,
+                    Weight::Regular,
+                    if j.sahipsiz { p.warning } else { p.text },
+                ))
+                .selectable(false),
+            );
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 3.0, p.border);
+            let mut filled = rect;
+            filled.set_width(rect.width() * ratio.max(0.02));
+            ui.painter().rect_filled(filled, 3.0, color);
+        }
+    });
+}
+
 fn connections_screen(ui: &mut Ui, p: Palette, conn: &Arc<ConnState>) {
     ui.spacing_mut().item_spacing.y = theme::GAP_LG;
 
+    work_card(ui, p);
     local_tools_card(ui, p);
 
     theme::card(ui, p, |ui| {

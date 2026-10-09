@@ -54,10 +54,10 @@ foreach ($ad in $Ikililer) {
             throw "$hedefYol çalışıyor (PID $($calisan.Id -join ', ')). Kapatın ya da -Durdur ile yeniden koşun."
         }
         # Hizmet (start.ps1'in açtığı, 11434) kurulumdan sonra yeniden açılır; pencereler açılmaz.
-        $hizmetPortu = $calisan | ForEach-Object {
+        $dinleyen = $calisan | ForEach-Object {
             Get-NetTCPConnection -OwningProcess $_.Id -State Listen -ErrorAction SilentlyContinue
         } | Where-Object LocalPort -eq $HizmetPortu
-        if ($hizmetPortu) { $hizmetiAc = $true }
+        if ($dinleyen) { $hizmetiAc = $true }
         $calisan | Stop-Process -Force
         $calisan | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
         Write-Host "durduruldu: $ad (PID $($calisan.Id -join ', '))"
